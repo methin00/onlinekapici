@@ -4,7 +4,8 @@ import { z } from 'zod';
 config();
 
 const envSchema = z.object({
-  API_PORT: z.coerce.number().default(4000),
+  API_PORT: z.coerce.number().optional(),
+  PORT: z.coerce.number().optional(),
   WEB_ORIGIN: z.string().default('http://localhost:3000'),
   API_KEY: z.string().min(8).default('dev-online-kapici-key'),
   JWT_SECRET: z.string().min(16).default('replace-with-a-long-random-string'),
@@ -14,5 +15,9 @@ const envSchema = z.object({
   TWILIO_WHATSAPP_FROM: z.string().optional()
 });
 
-export const env = envSchema.parse(process.env);
+const parsedEnv = envSchema.parse(process.env);
 
+export const env = {
+  ...parsedEnv,
+  API_PORT: parsedEnv.API_PORT ?? parsedEnv.PORT ?? 4000
+};
