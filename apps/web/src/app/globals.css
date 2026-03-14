@@ -181,7 +181,8 @@ body:not([data-panel-theme='tablet']) .text-white\/90 {
 
 body:not([data-panel-theme='tablet']) .text-cyan-300,
 body:not([data-panel-theme='tablet']) .text-cyan-400,
-body:not([data-panel-theme='tablet']) .text-cyan-400\/80 {
+body:not([data-panel-theme='tablet']) .text-cyan-400\/80,
+body:not([data-panel-theme='tablet']) .text-cyan-200\/70 {
   color: #145f67 !important;
 }
 

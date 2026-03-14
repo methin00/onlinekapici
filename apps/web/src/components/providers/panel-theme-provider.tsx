@@ -4,7 +4,8 @@ import { useLayoutEffect } from 'react';
 import { usePathname } from 'next/navigation';
 
 function resolvePanelTheme(pathname: string) {
-  return pathname.startsWith('/tablet') ? 'tablet' : 'soft';
+  void pathname;
+  return 'soft';
 }
 
 export function PanelThemeProvider({ children }: { children: React.ReactNode }) {
