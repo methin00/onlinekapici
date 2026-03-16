@@ -227,14 +227,18 @@ export function DashboardConsole() {
         <div className="grid gap-8 xl:grid-cols-[320px_minmax(0,1fr)]">
 
           {/* SIDEBAR */}
-          <aside className="glass-panel rounded-[32px] p-8 flex flex-col gap-8 h-fit sticky top-8">
+          <aside
+            className={`glass-panel flex h-fit flex-col gap-6 rounded-[32px] p-5 sm:gap-8 sm:p-8 xl:sticky xl:top-8 ${
+              isSuperAdmin ? '' : 'order-2 xl:order-1'
+            }`}
+          >
             <div>
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2.5 rounded-2xl border border-cyan-500/20 bg-cyan-500/10">
                   <Activity className="w-5 h-5 text-cyan-400" />
                 </div>
               </div>
-              <h1 className="font-heading text-4xl font-bold tracking-tight text-white mb-6">
+              <h1 className="mb-5 font-heading text-3xl font-bold tracking-tight text-white sm:mb-6 sm:text-4xl">
                 {isSuperAdmin ? 'Sistem Yönetimi' : 'Operasyon Merkezi'}
               </h1>
 
@@ -281,7 +285,7 @@ export function DashboardConsole() {
               {buildings.length ? (
                 buildings.map((building) => (
                   <div
-                    className="group relative overflow-hidden rounded-[24px] border border-white/5 bg-white/5 px-5 py-5 pl-10 transition-all hover:bg-white/10 hover:border-white/10"
+                    className="group relative overflow-hidden rounded-[24px] border border-white/5 bg-white/5 px-4 py-4 pl-9 transition-all hover:border-white/10 hover:bg-white/10 sm:px-5 sm:py-5 sm:pl-10"
                     key={building.id}
                   >
                     <span
@@ -290,7 +294,7 @@ export function DashboardConsole() {
                     />
                     <div className="flex flex-col gap-2">
                       <div className="flex items-start justify-between gap-3">
-                        <p className="font-heading text-xl font-semibold tracking-tight text-white group-hover:text-cyan-300 transition-colors">{building.name}</p>
+                        <p className="font-heading text-lg font-semibold tracking-tight text-white transition-colors group-hover:text-cyan-300 sm:text-xl">{building.name}</p>
                         <StatusPill
                           label={building.status === 'ONLINE' ? 'Online' : 'Offline'}
                           tone={building.status === 'ONLINE' ? 'success' : 'danger'}
@@ -307,11 +311,11 @@ export function DashboardConsole() {
               )}
             </div>
 
-            <div className="rounded-[24px] glass-card p-6 mt-auto">
+            <div className="mt-auto rounded-[24px] glass-card p-5 sm:p-6">
               <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 flex items-center gap-2">
                 <ShieldAlert className="w-3 h-3 text-amber-500" /> Aktif Odak
               </p>
-              <p className="font-heading mt-3 text-2xl font-bold tracking-tight text-white">
+              <p className="mt-3 font-heading text-xl font-bold tracking-tight text-white sm:text-2xl">
                 {featuredBuilding?.name ?? 'Atanmış bina yok'}
               </p>
               <p className="mt-3 text-xs leading-relaxed text-zinc-400">
@@ -321,19 +325,19 @@ export function DashboardConsole() {
           </aside>
 
           {/* MAIN SECTION */}
-          <section className="space-y-8 min-w-0">
+          <section className={`min-w-0 space-y-8 ${isSuperAdmin ? '' : 'order-1 xl:order-2'}`}>
             {activeTab === 'dashboard' ? (
               <>
                 {/* HEADER AREA */}
-                <header className="glass-panel rounded-[32px] px-8 py-8">
-                  <div className="flex flex-wrap items-end justify-between gap-6">
+                <header className="glass-panel rounded-[32px] px-5 py-6 sm:px-8 sm:py-8">
+                  <div className="flex flex-wrap items-start justify-between gap-6 sm:items-end">
                     <div className="max-w-2xl">
                       <div className="flex items-center gap-2 mb-3">
                         <span className="w-2 h-2 rounded-full bg-cyan-500" />
                         <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-400/80">Canlı Operasyon</p>
                       </div>
-                      <h2 className="font-heading text-4xl font-bold tracking-tight text-white lg:text-5xl lg:leading-[1.1]">
-                        Kapı Akışı ve <br /><span className="text-[var(--brand-primary)]">Danışma Müdahalesi</span>
+                      <h2 className="font-heading text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl lg:leading-[1.1]">
+                        Kapı Akışı ve <br className="hidden sm:block" /><span className="text-[var(--brand-primary)]">Danışma Müdahalesi</span>
                       </h2>
                       <p className="mt-4 text-base leading-relaxed text-zinc-400 max-w-xl">
                         Bekleyen çağrılar, düşen talepler ve kamera görüntüsü aynı yüzeyde tutulur. Böylece danışman
@@ -341,7 +345,7 @@ export function DashboardConsole() {
                       </p>
                     </div>
                     <button
-                      className="btn-surface rounded-full px-6 py-3.5 text-sm font-semibold flex items-center gap-2 group"
+                      className="btn-surface group flex w-full items-center justify-center gap-2 rounded-full px-6 py-3.5 text-sm font-semibold sm:w-auto"
                       onClick={() => {
                         setCameraTick(new Date().toISOString());
                         void loadOverview(false);
@@ -355,7 +359,7 @@ export function DashboardConsole() {
 
                   {notice ? (
                     <div className="mt-6 rounded-[20px] border border-white/10 bg-white/5 p-4">
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
                         <p className="text-sm font-medium text-white/90">{notice.message}</p>
                         <StatusPill label="Sistem" tone={notice.tone} />
                       </div>
@@ -392,10 +396,10 @@ export function DashboardConsole() {
                 </div>
 
                 {/* SPLIT VIEWS */}
-                <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
+                <div className="grid gap-6 sm:gap-8 lg:grid-cols-[1.1fr_0.9fr]">
                   {/* TIMELINE */}
-                  <section className="glass-panel rounded-[32px] p-8 flex flex-col min-h-[500px]">
-                    <div className="flex items-center justify-between gap-3 mb-8">
+                  <section className="glass-panel flex min-h-0 flex-col rounded-[32px] p-5 sm:p-8 lg:min-h-[500px]">
+                    <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:mb-8 sm:flex-row sm:items-center">
                       <div className="flex items-start gap-4">
                         <div className="p-3 rounded-2xl bg-white/5 border border-white/10">
                           <Clock className="w-6 h-6 text-amber-400" />
@@ -418,30 +422,30 @@ export function DashboardConsole() {
                           const callBuilding = buildings.find((building) => building.id === call.buildingId);
 
                           return (
-                            <div className="relative pl-10" key={call.id}>
+                            <div className="relative pl-8 sm:pl-10" key={call.id}>
                               {index < calls.length - 1 ? (
-                                <span className="absolute left-[11px] top-6 h-[calc(100%+8px)] w-[2px] bg-white/10" />
+                                <span className="absolute left-[9px] top-5 h-[calc(100%+8px)] w-[2px] bg-white/10 sm:left-[11px] sm:top-6" />
                               ) : null}
-                              <span className={`absolute left-0 top-3 h-6 w-6 rounded-full border-4 border-[var(--bg-deep)] ${timelineDotClass(call.status)}`} />
+                              <span className={`absolute left-0 top-3 h-5 w-5 rounded-full border-4 border-[var(--bg-deep)] sm:h-6 sm:w-6 ${timelineDotClass(call.status)}`} />
 
-                              <div className={`rounded-[24px] border p-5 transition-all hover:scale-[1.01] ${statusCardClass(call.status)}`}>
-                                <div className="flex flex-wrap items-start justify-between gap-3 mb-2">
-                                  <div className="flex items-center gap-3">
-                                    <h4 className="font-heading text-xl font-bold tracking-tight text-white">
+                              <div className={`rounded-[24px] border p-4 transition-all hover:scale-[1.01] sm:p-5 ${statusCardClass(call.status)}`}>
+                                <div className="mb-2 flex flex-wrap items-start justify-between gap-3 sm:flex-nowrap">
+                                  <div className="min-w-0">
+                                    <h4 className="font-heading text-lg font-bold tracking-tight text-white sm:text-xl">
                                       {call.visitorLabel}
                                     </h4>
                                   </div>
-                                  <StatusPill label={guestStatusLabel(call.status)} tone={call.status === 'approved' ? 'success' : call.status === 'rejected' ? 'danger' : call.status === 'escalated' ? 'info' : 'warning'} />
+                                  <StatusPill className="shrink-0" label={guestStatusLabel(call.status)} tone={call.status === 'approved' ? 'success' : call.status === 'rejected' ? 'danger' : call.status === 'escalated' ? 'info' : 'warning'} />
                                 </div>
                                 <p className="mt-2 flex items-center gap-2 text-sm font-medium text-zinc-400">
                                   <Building2 className="w-4 h-4 text-zinc-500" />
                                   <span>{callBuilding?.name ?? 'Bilinmeyen Site'}</span>
                                 </p>
-                                <div className="mt-3 flex flex-wrap items-center gap-4 rounded-xl border border-white/5 bg-black/20 px-4 py-2 text-sm text-zinc-400">
+                                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/20 px-3 py-3 text-sm text-zinc-400 sm:gap-4 sm:px-4 sm:py-2">
                                   <span className="flex items-center gap-1.5 font-medium"><Users className="w-3.5 h-3.5" />Konum {call.unitNumber}</span>
-                                  <span className="w-1 h-1 rounded-full bg-zinc-600" />
+                                  <span className="hidden h-1 w-1 rounded-full bg-zinc-600 sm:block" />
                                   <span>{call.residentName}</span>
-                                  <span className="w-1 h-1 rounded-full bg-zinc-600" />
+                                  <span className="hidden h-1 w-1 rounded-full bg-zinc-600 sm:block" />
                                   <span className="text-zinc-300 font-medium">{visitorTypeLabel(call.visitorType)}</span>
                                 </div>
                                 <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
@@ -463,7 +467,7 @@ export function DashboardConsole() {
                   <div className="flex flex-col gap-8">
                     {/* CAMERA STREAM */}
                     <section className="glass-panel overflow-hidden rounded-[32px] p-2">
-                      <div className="px-6 py-6 flex items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6 sm:py-6">
                         <div className="flex items-start gap-3">
                           <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
                             <Camera className="w-5 h-5 text-cyan-400" />
@@ -488,18 +492,20 @@ export function DashboardConsole() {
                           <div className="absolute left-4 top-4 rounded-full bg-black/75 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white">
                             Canlı Ön İzleme
                           </div>
-                          <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-2">
-                            <span className="inline-flex items-center gap-2 rounded-full bg-black/75 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white">
-                              <span className="h-2 w-2 rounded-full bg-red-500" />
-                              REC
-                            </span>
-                            <span className="rounded-full bg-black/75 px-3 py-1.5 text-xs font-medium text-white">
-                              {formatDateTime(cameraTick)}
-                            </span>
-                          </div>
-                          <div className="absolute bottom-4 right-4 rounded-2xl bg-black/75 px-4 py-3 text-right text-white">
-                            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-300">Site</p>
-                            <p className="mt-1 text-sm font-semibold">{cameraPreviewBuilding?.name ?? 'Bilinmeyen Site'}</p>
+                          <div className="absolute inset-x-4 bottom-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="inline-flex items-center gap-2 rounded-full bg-black/75 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white">
+                                <span className="h-2 w-2 rounded-full bg-red-500" />
+                                REC
+                              </span>
+                              <span className="rounded-full bg-black/75 px-3 py-1.5 text-xs font-medium text-white">
+                                {formatDateTime(cameraTick)}
+                              </span>
+                            </div>
+                            <div className="rounded-2xl bg-black/75 px-4 py-3 text-left text-white sm:max-w-[220px] sm:text-right">
+                              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-300">Site</p>
+                              <p className="mt-1 text-sm font-semibold">{cameraPreviewBuilding?.name ?? 'Bilinmeyen Site'}</p>
+                            </div>
                           </div>
                         </div>
                       ) : (
@@ -514,8 +520,8 @@ export function DashboardConsole() {
                     </section>
 
                     {/* FALLBACK CALLS */}
-                    <section className="glass-panel rounded-[32px] p-8 flex-1">
-                      <div className="flex items-center justify-between gap-3 mb-6">
+                    <section className="glass-panel flex-1 rounded-[32px] p-5 sm:p-8">
+                      <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
                         <div className="flex items-start gap-4">
                           <div className="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20">
                             <PhoneCall className="w-5 h-5 text-blue-400" />
@@ -535,22 +541,22 @@ export function DashboardConsole() {
 
                             return (
                               <div
-                                className="group rounded-[20px] border border-white/5 bg-white-[0.02] hover:bg-white/5 px-5 py-4 transition-colors"
+                                className="group rounded-[20px] border border-white/5 bg-white-[0.02] px-4 py-4 transition-colors hover:bg-white/5 sm:px-5"
                                 key={call.id}
                               >
-                                <div className="flex items-center justify-between gap-3">
-                                  <div>
+                                <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                  <div className="min-w-0">
                                     <p className="font-semibold text-white tracking-tight">{call.visitorLabel}</p>
-                                    <p className="mt-1 text-xs text-zinc-400 flex items-center gap-2">
+                                    <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
                                       <Building2 className="w-3 h-3" />
                                       <span className="text-zinc-300">{callBuilding?.name ?? 'Bilinmeyen Site'}</span>
-                                      <span className="w-1 h-1 rounded-full bg-zinc-700" />
+                                      <span className="hidden h-1 w-1 rounded-full bg-zinc-700 sm:block" />
                                       Konum {call.unitNumber}
-                                      <span className="w-1 h-1 rounded-full bg-zinc-700" />
+                                      <span className="hidden h-1 w-1 rounded-full bg-zinc-700 sm:block" />
                                       {call.residentName}
                                     </p>
                                   </div>
-                                  <StatusPill label={guestStatusLabel(call.status)} tone={call.status === 'rejected' ? 'danger' : 'info'} />
+                                  <StatusPill className="shrink-0" label={guestStatusLabel(call.status)} tone={call.status === 'rejected' ? 'danger' : 'info'} />
                                 </div>
                               </div>
                             );
@@ -566,8 +572,8 @@ export function DashboardConsole() {
                 </div>
 
                 {/* ACTION CARDS (Anlık Müdahale) */}
-                <section className="glass-panel rounded-[32px] p-8 mt-8">
-                  <div className="flex items-center justify-between gap-3 mb-8">
+                <section className="glass-panel mt-6 rounded-[32px] p-5 sm:mt-8 sm:p-8">
+                  <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:mb-8 sm:flex-row sm:items-center">
                     <div className="flex items-start gap-4">
                       <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 shadow-[0_0_30px_rgba(245,158,11,0.1)]">
                         <KeySquare className="w-6 h-6 text-amber-500" />
@@ -580,18 +586,18 @@ export function DashboardConsole() {
                     <StatusPill label={`${calls.length} Aktif Akış`} tone="warning" />
                   </div>
 
-                  <div className="grid gap-6 xl:grid-cols-2 relative z-10">
+                  <div className="relative z-10 grid gap-4 sm:gap-6 xl:grid-cols-2">
                     {loading ? (
                       <div className="col-span-full rounded-[24px] border border-dashed border-white/10 px-6 py-12 text-center text-sm text-zinc-500">
                         Operasyon kartları yükleniyor...
                       </div>
                     ) : calls.length ? (
                       calls.map((call) => (
-                        <div className={`rounded-[28px] border p-6 flex flex-col justify-between gap-6 transition-all hover:-translate-y-1 ${statusCardClass(call.status)}`} key={call.id}>
-                          <div className="flex items-start justify-between gap-4">
-                            <div>
+                        <div className={`flex flex-col justify-between gap-6 rounded-[28px] border p-5 transition-all hover:-translate-y-1 sm:p-6 ${statusCardClass(call.status)}`} key={call.id}>
+                          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="min-w-0">
                               <div className="flex flex-wrap items-center gap-3 mb-2">
-                                <h4 className="font-heading text-2xl font-bold tracking-tight text-white">
+                                <h4 className="font-heading text-xl font-bold tracking-tight text-white sm:text-2xl">
                                   {call.visitorLabel}
                                 </h4>
                                 <span className="px-2 py-1 rounded bg-white/10 text-xs font-medium text-zinc-300">
@@ -601,18 +607,19 @@ export function DashboardConsole() {
                               {(() => {
                                 const callBuilding = buildings.find(b => b.id === call.buildingId);
                                 return (
-                                  <p className="text-sm leading-relaxed text-zinc-400 flex flex-wrap items-center gap-2">
+                                  <p className="flex flex-wrap items-center gap-2 text-sm leading-relaxed text-zinc-400">
                                     <Building2 className="w-4 h-4 text-zinc-500 shrink-0" />
                                     <span className="text-zinc-300">{callBuilding?.name ?? 'Bilinmeyen Site'}</span>
-                                    <span className="w-1 h-1 rounded-full bg-zinc-600" />
+                                    <span className="hidden h-1 w-1 rounded-full bg-zinc-600 sm:block" />
                                     Konum {call.unitNumber}
-                                    <span className="w-1 h-1 rounded-full bg-zinc-600" />
+                                    <span className="hidden h-1 w-1 rounded-full bg-zinc-600 sm:block" />
                                     {call.residentName}
                                   </p>
                                 );
                               })()}
                             </div>
                             <StatusPill
+                              className="shrink-0"
                               label={guestStatusLabel(call.status)}
                               tone={
                                 call.status === 'approved'
@@ -626,9 +633,9 @@ export function DashboardConsole() {
                             />
                           </div>
 
-                          <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-white/10">
+                          <div className="flex flex-col items-stretch gap-3 border-t border-white/10 pt-4 sm:flex-row sm:flex-wrap sm:items-center">
                             <button
-                              className="flex-1 min-w-[180px] btn-premium rounded-xl px-5 py-4 text-sm font-semibold flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:grayscale transition-all"
+                              className="btn-premium flex w-full min-w-0 items-center justify-center gap-2 rounded-xl px-5 py-4 text-sm font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50 disabled:grayscale sm:flex-1"
                               disabled={actionCallId === call.id}
                               onClick={() => void handleManualOpen(call.id)}
                               type="button"
@@ -637,7 +644,7 @@ export function DashboardConsole() {
                               {actionCallId === call.id ? 'İşleniyor...' : 'Kapıyı Uzaktan Aç'}
                             </button>
                             <button
-                              className="flex-1 min-w-[180px] btn-surface rounded-xl px-5 py-4 text-sm font-semibold flex items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50 transition-all hover:bg-blue-500/10 hover:text-blue-400 hover:border-blue-500/30"
+                              className="btn-surface flex w-full min-w-0 items-center justify-center gap-2 rounded-xl px-5 py-4 text-sm font-semibold transition-all hover:border-blue-500/30 hover:bg-blue-500/10 hover:text-blue-400 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-1"
                               disabled={actionCallId === call.id}
                               onClick={() => void handleConnect(call.id)}
                               type="button"
