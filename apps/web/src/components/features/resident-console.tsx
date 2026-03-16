@@ -231,7 +231,7 @@ export function ResidentConsole() {
                   <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-[var(--bg-surface)]">
                     <ShieldCheck className="mb-1 h-8 w-8 text-zinc-500" />
                   </div>
-                  <h2 className="font-heading text-2xl font-bold tracking-tight text-white">Güvendesiniz</h2>
+                  <h2 className="font-heading text-2xl font-bold tracking-tight text-white">Bekleyen Çağrı Yok</h2>
                   <p className="mt-2 text-sm leading-relaxed text-zinc-500">
                     Şu anda bekleyen ziyaret bulunmuyor. Yeni çağrı geldiğinde burada belirecektir.
                   </p>
