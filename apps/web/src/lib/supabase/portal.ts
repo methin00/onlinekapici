@@ -22,6 +22,7 @@ import type {
   Profile,
   ResidentPreference,
   ServiceProvider,
+  SiteInvoicePlan,
   Site,
   Unit
 } from '@/lib/portal-types';
@@ -113,6 +114,18 @@ type InvoiceRow = {
   due_date: string;
   status: InvoiceRecord['status'];
   paid_at: string | null;
+};
+
+type SiteInvoicePlanRow = {
+  id: string;
+  site_id: string;
+  amount: number | string;
+  due_day: number;
+  active: boolean;
+  start_month: string;
+  last_generated_period: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type PaymentRow = {
@@ -230,6 +243,25 @@ function requireRow<T>(error: { message: string } | null, row: T | null, fallbac
   return row;
 }
 
+function optionalRows<T>(error: { message: string } | null, rows: T[] | null) {
+  if (error) {
+    const message = error.message.toLocaleLowerCase('tr-TR');
+    if (
+      message.includes('does not exist') ||
+      message.includes('bulunamadı') ||
+      message.includes('could not find') ||
+      message.includes('relation') ||
+      message.includes('column')
+    ) {
+      return [];
+    }
+
+    throw new Error(error.message);
+  }
+
+  return rows ?? [];
+}
+
 function mapSites(rows: SiteRow[]): Site[] {
   return rows.map((row) => ({
     id: row.id,
@@ -331,6 +363,20 @@ function mapAnnouncementReads(rows: AnnouncementReadRow[]): AnnouncementRead[] {
     announcementId: row.announcement_id,
     profileId: row.profile_id,
     readAt: row.read_at
+  }));
+}
+
+function mapSiteInvoicePlans(rows: SiteInvoicePlanRow[]): SiteInvoicePlan[] {
+  return rows.map((row) => ({
+    id: row.id,
+    siteId: row.site_id,
+    amount: Number(row.amount),
+    dueDay: row.due_day,
+    active: row.active,
+    startMonth: row.start_month,
+    lastGeneratedPeriod: row.last_generated_period ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
   }));
 }
 
@@ -465,6 +511,7 @@ export function createEmptyPortalState(): PortalState {
     logs: [],
     announcements: [],
     announcementReads: [],
+    siteInvoicePlans: [],
     invoices: [],
     payments: [],
     packages: [],
@@ -632,6 +679,7 @@ export async function fetchPortalState(client: SupabaseClient, user: PortalSessi
     logsResponse,
     announcementsResponse,
     announcementReadsResponse,
+    siteInvoicePlansResponse,
     invoicesResponse,
     paymentsResponse,
     packagesResponse,
@@ -681,6 +729,10 @@ export async function fetchPortalState(client: SupabaseClient, user: PortalSessi
       .from('announcement_reads')
       .select('id, announcement_id, profile_id, read_at')
       .eq('profile_id', user.id),
+    client
+      .from('site_invoice_plans')
+      .select('id, site_id, amount, due_day, active, start_month, last_generated_period, created_at, updated_at')
+      .order('updated_at', { ascending: false }),
     client
       .from('invoices')
       .select('id, unit_id, period_label, amount, due_date, status, paid_at')
@@ -771,6 +823,9 @@ export async function fetchPortalState(client: SupabaseClient, user: PortalSessi
         announcementReadsResponse.data as AnnouncementReadRow[] | null,
         'Duyuru okuma kayıtları alınamadı.'
       )
+    ),
+    siteInvoicePlans: mapSiteInvoicePlans(
+      optionalRows(siteInvoicePlansResponse.error, siteInvoicePlansResponse.data as SiteInvoicePlanRow[] | null)
     ),
     invoices: mapInvoices(
       requireRows(invoicesResponse.error, invoicesResponse.data as InvoiceRow[] | null, 'Aidat kayıtları alınamadı.')

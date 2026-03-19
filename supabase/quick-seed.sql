@@ -234,6 +234,25 @@ set
   pinned = excluded.pinned,
   published_at = excluded.published_at;
 
+insert into public.site_invoice_plans (id, site_id, amount, due_day, active, start_month, last_generated_period)
+values
+  (
+    'abababab-abab-4bab-8bab-abababababab',
+    '11111111-1111-4111-8111-111111111111',
+    1850,
+    10,
+    true,
+    date_trunc('month', current_date)::date,
+    date_trunc('month', current_date)::date
+  )
+on conflict (site_id) do update
+set
+  amount = excluded.amount,
+  due_day = excluded.due_day,
+  active = excluded.active,
+  start_month = excluded.start_month,
+  last_generated_period = excluded.last_generated_period;
+
 insert into public.invoices (id, unit_id, period_label, amount, due_date, status, paid_at)
 values
   ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1', '44444444-4444-4444-8444-444444444444', 'Mart 2026', 1850, current_date + 6, 'paid', now() - interval '3 days'),

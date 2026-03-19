@@ -52,7 +52,14 @@ function readProviderCategory(value: unknown) {
   return value as ProviderCategory;
 }
 
-async function requireSuperAdmin(request: NextRequest) {
+type ActorProfile = {
+  id: string;
+  role: 'super_admin' | 'consultant' | 'manager' | 'resident' | 'kiosk_device';
+  unit_id: string | null;
+  primary_building_id: string | null;
+};
+
+async function requireActor(request: NextRequest) {
   const authorization = request.headers.get('authorization');
   const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : null;
 
@@ -72,20 +79,279 @@ async function requireSuperAdmin(request: NextRequest) {
 
   const { data: profile, error: profileError } = await admin
     .from('profiles')
-    .select('id, role')
+    .select('id, role, unit_id, primary_building_id')
     .eq('id', user.id)
     .maybeSingle();
 
-  if (profileError || !profile || profile.role !== 'super_admin') {
-    throw new HttpError('Bu işlem için süper yönetici yetkisi gerekiyor.', 403);
+  if (profileError || !profile) {
+    throw new HttpError('Oturum profili bulunamadı.', 403);
   }
 
-  return admin;
+  return {
+    admin,
+    actor: profile as ActorProfile
+  };
+}
+
+function ensureSuperAdmin(actor: ActorProfile) {
+  if (actor.role !== 'super_admin') {
+    throw new HttpError('Bu işlem için süper yönetici yetkisi gerekiyor.', 403);
+  }
 }
 
 async function ensureSuccess(error: { message: string } | null, fallbackMessage: string) {
   if (error) {
     throw new HttpError(error.message || fallbackMessage, 400);
+  }
+}
+
+async function getAccessibleSiteIds(admin: ReturnType<typeof getSupabaseAdminClient>, actor: ActorProfile) {
+  if (actor.role === 'super_admin') {
+    const { data, error } = await admin.from('sites').select('id');
+    await ensureSuccess(error, 'Site listesi alınamadı.');
+    return (data ?? []).map((row) => row.id);
+  }
+
+  if (actor.role === 'manager') {
+    const { data, error } = await admin
+      .from('manager_site_assignments')
+      .select('site_id')
+      .eq('profile_id', actor.id);
+
+    await ensureSuccess(error, 'Yönetici site atamaları alınamadı.');
+    return (data ?? []).map((row) => row.site_id);
+  }
+
+  if (actor.role === 'consultant') {
+    const { data, error } = await admin
+      .from('consultant_site_assignments')
+      .select('site_id')
+      .eq('profile_id', actor.id);
+
+    await ensureSuccess(error, 'Danışman site atamaları alınamadı.');
+    return (data ?? []).map((row) => row.site_id);
+  }
+
+  if (actor.role === 'resident' && actor.unit_id) {
+    const { data: unit, error: unitError } = await admin
+      .from('units')
+      .select('id, building_id')
+      .eq('id', actor.unit_id)
+      .maybeSingle();
+
+    await ensureSuccess(unitError, 'Daire bilgisi alınamadı.');
+
+    if (!unit) {
+      return [];
+    }
+
+    const { data: building, error: buildingError } = await admin
+      .from('buildings')
+      .select('site_id')
+      .eq('id', unit.building_id)
+      .maybeSingle();
+
+    await ensureSuccess(buildingError, 'Site bilgisi alınamadı.');
+    return building ? [building.site_id] : [];
+  }
+
+  if (actor.role === 'kiosk_device' && actor.primary_building_id) {
+    const { data: building, error } = await admin
+      .from('buildings')
+      .select('site_id')
+      .eq('id', actor.primary_building_id)
+      .maybeSingle();
+
+    await ensureSuccess(error, 'Terminal site bilgisi alınamadı.');
+    return building ? [building.site_id] : [];
+  }
+
+  return [];
+}
+
+async function ensureCanManageSite(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  actor: ActorProfile,
+  siteId: string
+) {
+  if (actor.role === 'super_admin') {
+    return;
+  }
+
+  if (actor.role !== 'manager') {
+    throw new HttpError('Bu işlem için site yöneticisi yetkisi gerekiyor.', 403);
+  }
+
+  const { data, error } = await admin
+    .from('manager_site_assignments')
+    .select('id')
+    .eq('profile_id', actor.id)
+    .eq('site_id', siteId)
+    .maybeSingle();
+
+  await ensureSuccess(error, 'Site yetkisi doğrulanamadı.');
+
+  if (!data) {
+    throw new HttpError('Bu site için yönetim yetkiniz bulunmuyor.', 403);
+  }
+}
+
+function formatInvoicePeriodLabel(date: Date) {
+  const label = new Intl.DateTimeFormat('tr-TR', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC'
+  }).format(date);
+
+  return label.charAt(0).toLocaleUpperCase('tr-TR') + label.slice(1);
+}
+
+function monthStart(date: Date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function addMonths(date: Date, count: number) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + count, 1));
+}
+
+function isoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+async function syncSiteInvoices(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  siteId: string
+) {
+  const { data: plan, error: planError } = await admin
+    .from('site_invoice_plans')
+    .select('id, site_id, amount, due_day, active, start_month, last_generated_period')
+    .eq('site_id', siteId)
+    .maybeSingle();
+
+  if (planError) {
+    const message = planError.message.toLocaleLowerCase('tr-TR');
+    if (message.includes('does not exist') || message.includes('relation') || message.includes('column')) {
+      return;
+    }
+
+    throw new HttpError(planError.message || 'Aidat planı alınamadı.', 400);
+  }
+
+  if (!plan?.active) {
+    return;
+  }
+
+  const { data: buildings, error: buildingsError } = await admin
+    .from('buildings')
+    .select('id')
+    .eq('site_id', siteId);
+
+  await ensureSuccess(buildingsError, 'Site blokları alınamadı.');
+  const buildingIds = (buildings ?? []).map((building) => building.id);
+
+  if (!buildingIds.length) {
+    return;
+  }
+
+  const { data: units, error: unitsError } = await admin
+    .from('units')
+    .select('id, created_at')
+    .in('building_id', buildingIds);
+
+  await ensureSuccess(unitsError, 'Site daireleri alınamadı.');
+  const unitRows = (units ?? []) as Array<{ id: string; created_at: string }>;
+  const unitIds = unitRows.map((unit) => unit.id);
+
+  if (!unitIds.length) {
+    return;
+  }
+
+  const today = new Date();
+  const todayUtc = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  const todayIso = isoDate(todayUtc);
+
+  const { error: overdueError } = await admin
+    .from('invoices')
+    .update({ status: 'overdue' })
+    .in('unit_id', unitIds)
+    .eq('status', 'unpaid')
+    .lt('due_date', todayIso);
+
+  await ensureSuccess(overdueError, 'Gecikmiş aidatlar güncellenemedi.');
+
+  const { data: existingInvoices, error: existingInvoicesError } = await admin
+    .from('invoices')
+    .select('unit_id, period_label')
+    .in('unit_id', unitIds);
+
+  await ensureSuccess(existingInvoicesError, 'Mevcut aidat kayıtları alınamadı.');
+  const existingKeys = new Set(
+    ((existingInvoices ?? []) as Array<{ unit_id: string; period_label: string }>).map(
+      (invoice) => `${invoice.unit_id}:${invoice.period_label}`
+    )
+  );
+
+  const startMonth = monthStart(new Date(plan.start_month));
+  const currentMonth = monthStart(todayUtc);
+  const nextCursorSource = plan.last_generated_period ? addMonths(new Date(plan.last_generated_period), 1) : startMonth;
+  let cursor = monthStart(nextCursorSource < startMonth ? startMonth : nextCursorSource);
+  let lastProcessedPeriod: string | null = plan.last_generated_period ?? null;
+  const invoicesToInsert: Array<{
+    unit_id: string;
+    period_label: string;
+    amount: number;
+    due_date: string;
+    status: 'unpaid' | 'overdue';
+  }> = [];
+
+  while (cursor <= currentMonth) {
+    const dueDate = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), plan.due_day));
+
+    if (dueDate > todayUtc) {
+      break;
+    }
+
+    const periodLabel = formatInvoicePeriodLabel(cursor);
+
+    for (const unit of unitRows) {
+      if (new Date(unit.created_at) > dueDate) {
+        continue;
+      }
+
+      const key = `${unit.id}:${periodLabel}`;
+      if (existingKeys.has(key)) {
+        continue;
+      }
+
+      invoicesToInsert.push({
+        unit_id: unit.id,
+        period_label: periodLabel,
+        amount: Number(plan.amount),
+        due_date: isoDate(dueDate),
+        status: dueDate < todayUtc ? 'overdue' : 'unpaid'
+      });
+      existingKeys.add(key);
+    }
+
+    lastProcessedPeriod = isoDate(cursor);
+    cursor = addMonths(cursor, 1);
+  }
+
+  if (invoicesToInsert.length) {
+    const { error: insertError } = await admin.from('invoices').insert(invoicesToInsert);
+    await ensureSuccess(insertError, 'Yeni aidat kayıtları oluşturulamadı.');
+  }
+
+  if (lastProcessedPeriod && lastProcessedPeriod !== plan.last_generated_period) {
+    const { error: planUpdateError } = await admin
+      .from('site_invoice_plans')
+      .update({
+        last_generated_period: lastProcessedPeriod,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', plan.id);
+
+    await ensureSuccess(planUpdateError, 'Aidat planı senkron bilgisi güncellenemedi.');
   }
 }
 
@@ -157,7 +423,7 @@ async function clearFormerManagerRoles(admin: ReturnType<typeof getSupabaseAdmin
 
 export async function POST(request: NextRequest) {
   try {
-    const admin = await requireSuperAdmin(request);
+    const { admin, actor } = await requireActor(request);
     const body = (await request.json().catch(() => null)) as
       | { action?: string; payload?: Record<string, unknown> }
       | null;
@@ -170,6 +436,7 @@ export async function POST(request: NextRequest) {
 
     switch (body.action) {
       case 'createSite': {
+        ensureSuperAdmin(actor);
         const name = readTrimmedString(payload.name, 'Site adı', 2);
         const address = readTrimmedString(payload.address, 'Adres', 6);
         const district = readTrimmedString(payload.district, 'İlçe', 2);
@@ -187,6 +454,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'deleteSite': {
+        ensureSuperAdmin(actor);
         const siteId = readTrimmedString(payload.siteId, 'Site');
         const { error } = await admin.from('sites').delete().eq('id', siteId);
         await ensureSuccess(error, 'Site silinemedi.');
@@ -194,6 +462,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'createBuilding': {
+        ensureSuperAdmin(actor);
         const siteId = readTrimmedString(payload.siteId, 'Site');
         const name = readTrimmedString(payload.name, 'Blok adı', 1);
         const address = readTrimmedString(payload.address, 'Blok adresi', 4);
@@ -215,6 +484,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'deleteBuilding': {
+        ensureSuperAdmin(actor);
         const buildingId = readTrimmedString(payload.buildingId, 'Blok');
         const { error } = await admin.from('buildings').delete().eq('id', buildingId);
         await ensureSuccess(error, 'Blok silinemedi.');
@@ -222,6 +492,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'createUnit': {
+        ensureSuperAdmin(actor);
         const buildingId = readTrimmedString(payload.buildingId, 'Blok');
         const unitNumber = readTrimmedString(payload.unitNumber, 'Daire numarası', 1);
         const floor = readNumber(payload.floor, 'Kat');
@@ -237,6 +508,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'updateUnit': {
+        ensureSuperAdmin(actor);
         const unitId = readTrimmedString(payload.unitId, 'Daire');
         const unitNumber = readTrimmedString(payload.unitNumber, 'Daire numarası', 1);
         const floor = readNumber(payload.floor, 'Kat');
@@ -254,6 +526,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'deleteUnit': {
+        ensureSuperAdmin(actor);
         const unitId = readTrimmedString(payload.unitId, 'Daire');
         const { error } = await admin.from('units').delete().eq('id', unitId);
         await ensureSuccess(error, 'Daire silinemedi.');
@@ -261,6 +534,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'createResident': {
+        ensureSuperAdmin(actor);
         const email = readTrimmedString(payload.email, 'E-posta', 6).toLocaleLowerCase('tr-TR');
         const password = readTrimmedString(payload.password, 'Şifre', 6);
         const fullName = readTrimmedString(payload.fullName, 'Ad soyad', 3);
@@ -312,6 +586,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'assignSiteManager': {
+        ensureSuperAdmin(actor);
         const siteId = readTrimmedString(payload.siteId, 'Site');
         const profileId = typeof payload.profileId === 'string' ? payload.profileId.trim() : '';
 
@@ -363,6 +638,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'setConsultantAssignment': {
+        ensureSuperAdmin(actor);
         const siteId = readTrimmedString(payload.siteId, 'Site');
         const profileId = readTrimmedString(payload.profileId, 'Danışman');
         const assigned = Boolean(payload.assigned);
@@ -403,6 +679,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'updateServiceProvider': {
+        ensureSuperAdmin(actor);
         const providerId = readTrimmedString(payload.providerId, 'Hizmet kaydı');
         const category = readProviderCategory(payload.category);
         const fullName = readTrimmedString(payload.fullName, 'Hizmet adı', 2);
@@ -424,9 +701,76 @@ export async function POST(request: NextRequest) {
       }
 
       case 'deleteServiceProvider': {
+        ensureSuperAdmin(actor);
         const providerId = readTrimmedString(payload.providerId, 'Hizmet kaydı');
         const { error } = await admin.from('service_providers').delete().eq('id', providerId);
         await ensureSuccess(error, 'Hizmet kaydı silinemedi.');
+        break;
+      }
+
+      case 'upsertSiteInvoicePlan': {
+        const siteId = readTrimmedString(payload.siteId, 'Site');
+        const amount = readNumber(payload.amount, 'Aidat tutarı');
+        const dueDay = readNumber(payload.dueDay, 'Aidat günü');
+        const active = Boolean(payload.active);
+
+        if (amount <= 0) {
+          throw new HttpError('Aidat tutarı sıfırdan büyük olmalı.', 400);
+        }
+
+        if (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 28) {
+          throw new HttpError('Aidat günü 1 ile 28 arasında olmalı.', 400);
+        }
+
+        await ensureCanManageSite(admin, actor, siteId);
+
+        const { data: existingPlan, error: existingPlanError } = await admin
+          .from('site_invoice_plans')
+          .select('start_month')
+          .eq('site_id', siteId)
+          .maybeSingle();
+
+        if (existingPlanError) {
+          const message = existingPlanError.message.toLocaleLowerCase('tr-TR');
+
+          if (!message.includes('does not exist') && !message.includes('relation') && !message.includes('column')) {
+            throw new HttpError(existingPlanError.message || 'Aidat planÄ± kontrol edilemedi.', 400);
+          }
+        }
+
+        const { error } = await admin.from('site_invoice_plans').upsert(
+          {
+            site_id: siteId,
+            amount,
+            due_day: dueDay,
+            active,
+            start_month: existingPlan?.start_month ?? new Date().toISOString().slice(0, 7) + '-01',
+            updated_at: new Date().toISOString()
+          },
+          {
+            onConflict: 'site_id'
+          }
+        );
+
+        await ensureSuccess(error, 'Aidat planı kaydedilemedi.');
+        await syncSiteInvoices(admin, siteId);
+        break;
+      }
+
+      case 'syncInvoicePlans': {
+        const allowedSiteIds = new Set(await getAccessibleSiteIds(admin, actor));
+        const requestedSiteIds = Array.isArray(payload.siteIds)
+          ? payload.siteIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+          : [];
+
+        const targetSiteIds = (requestedSiteIds.length ? requestedSiteIds : [...allowedSiteIds]).filter((siteId) =>
+          allowedSiteIds.has(siteId)
+        );
+
+        for (const siteId of targetSiteIds) {
+          await syncSiteInvoices(admin, siteId);
+        }
+
         break;
       }
 

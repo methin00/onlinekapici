@@ -109,6 +109,18 @@ export interface InvoiceRecord {
   paidAt?: string;
 }
 
+export interface SiteInvoicePlan {
+  id: string;
+  siteId: string;
+  amount: number;
+  dueDay: number;
+  active: boolean;
+  startMonth: string;
+  lastGeneratedPeriod?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PaymentRecord {
   id: string;
   invoiceId: string;
@@ -207,6 +219,7 @@ export interface PortalState {
   logs: LogEntry[];
   announcements: Announcement[];
   announcementReads: AnnouncementRead[];
+  siteInvoicePlans: SiteInvoicePlan[];
   invoices: InvoiceRecord[];
   payments: PaymentRecord[];
   packages: PackageRecord[];

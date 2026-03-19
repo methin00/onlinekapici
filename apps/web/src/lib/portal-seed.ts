@@ -276,6 +276,19 @@ export const portalSeedState: PortalState = {
       readAt: hoursAgo(10)
     }
   ],
+  siteInvoicePlans: [
+    {
+      id: 'invoice-plan-atlas',
+      siteId: 'site-atlas',
+      amount: 1850,
+      dueDay: 10,
+      active: true,
+      startMonth: '2026-01-01',
+      lastGeneratedPeriod: '2026-03-01',
+      createdAt: daysAgo(45),
+      updatedAt: daysAgo(2)
+    }
+  ],
   invoices: [
     {
       id: 'invoice-1',

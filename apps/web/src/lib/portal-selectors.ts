@@ -219,7 +219,7 @@ export function buildUnitResidentRows(state: PortalState, buildings: Building[],
   const buildingMap = new Map(buildings.map((building) => [building.id, building] as const));
   const residentMap = new Map(
     profiles
-      .filter((profile) => profile.role === 'resident' && profile.unitId)
+      .filter((profile) => (profile.role === 'resident' || profile.role === 'manager') && profile.unitId)
       .map((profile) => [profile.unitId!, profile] as const)
   );
 

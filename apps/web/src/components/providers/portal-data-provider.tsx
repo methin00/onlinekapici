@@ -128,6 +128,13 @@ type SetConsultantAssignmentInput = {
   assigned: boolean;
 };
 
+type UpsertSiteInvoicePlanInput = {
+  siteId: string;
+  amount: number;
+  dueDay: number;
+  active: boolean;
+};
+
 type CreateAccessPassInput = {
   unitId: string;
   holderName: string;
@@ -171,6 +178,8 @@ type PortalDataContextValue = {
   createResident: (input: CreateResidentInput) => Promise<void>;
   assignSiteManager: (input: AssignSiteManagerInput) => Promise<void>;
   setConsultantAssignment: (input: SetConsultantAssignmentInput) => Promise<void>;
+  upsertSiteInvoicePlan: (input: UpsertSiteInvoicePlanInput) => Promise<void>;
+  syncInvoicePlans: (siteIds?: string[]) => Promise<void>;
   setResidentAwayMode: (profileId: string, awayModeEnabled: boolean) => Promise<void>;
   createServiceProvider: (input: CreateServiceProviderInput) => Promise<void>;
   updateServiceProviderDetails: (input: UpdateServiceProviderInput) => Promise<void>;
@@ -205,6 +214,7 @@ function createRealtimeTables() {
     'logs',
     'announcements',
     'announcement_reads',
+    'site_invoice_plans',
     'invoices',
     'payment_records',
     'packages',
@@ -231,6 +241,15 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     }
 
     const client = assertAuthenticated();
+
+    if (session.user.siteIds.length) {
+      try {
+        await syncInvoicePlans(session.user.siteIds);
+      } catch {
+        // Aidat planı henüz kurulmamış olabilir; ana veri akışını bloklamayalım.
+      }
+    }
+
     const nextState = await withSupabaseTimeout(
       fetchPortalState(client, session.user),
       12000,
@@ -259,6 +278,16 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     if (!response.ok) {
       throw new Error(result?.error ?? 'Yönetim işlemi tamamlanamadı.');
     }
+  }
+
+  async function syncInvoicePlans(siteIds?: string[]) {
+    if (!session?.token) {
+      return;
+    }
+
+    await adminPortalAction('syncInvoicePlans', {
+      siteIds: siteIds?.length ? siteIds : session.user.siteIds
+    });
   }
 
   useEffect(() => {
@@ -621,6 +650,12 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     await refreshState();
   }
 
+  async function upsertSiteInvoicePlan(input: UpsertSiteInvoicePlanInput) {
+    await adminPortalAction('upsertSiteInvoicePlan', input);
+    await syncInvoicePlans([input.siteId]);
+    await refreshState();
+  }
+
   async function setResidentAwayMode(profileId: string, awayModeEnabled: boolean) {
     const client = assertAuthenticated();
     const { error } = await client.from('resident_preferences').upsert(
@@ -744,6 +779,8 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
       createResident,
       assignSiteManager,
       setConsultantAssignment,
+      upsertSiteInvoicePlan,
+      syncInvoicePlans,
       setResidentAwayMode,
       createServiceProvider,
       updateServiceProviderDetails,

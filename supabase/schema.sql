@@ -113,6 +113,19 @@ create table if not exists public.announcement_reads (
   unique (announcement_id, profile_id)
 );
 
+create table if not exists public.site_invoice_plans (
+  id uuid primary key default gen_random_uuid(),
+  site_id uuid not null references public.sites(id) on delete cascade,
+  amount numeric(12, 2) not null,
+  due_day integer not null check (due_day between 1 and 28),
+  active boolean not null default true,
+  start_month date not null default date_trunc('month', now())::date,
+  last_generated_period date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (site_id)
+);
+
 create table if not exists public.invoices (
   id uuid primary key default gen_random_uuid(),
   unit_id uuid not null references public.units(id) on delete cascade,
@@ -220,6 +233,7 @@ alter table public.guest_requests enable row level security;
 alter table public.logs enable row level security;
 alter table public.announcements enable row level security;
 alter table public.announcement_reads enable row level security;
+alter table public.site_invoice_plans enable row level security;
 alter table public.invoices enable row level security;
 alter table public.payment_records enable row level security;
 alter table public.packages enable row level security;
@@ -622,6 +636,25 @@ create policy "announcement_reads_insert_self"
 on public.announcement_reads
 for insert
 with check (profile_id = auth.uid());
+
+drop policy if exists "site_invoice_plans_select_access" on public.site_invoice_plans;
+create policy "site_invoice_plans_select_access"
+on public.site_invoice_plans
+for select
+using (public.can_manage_site(site_id));
+
+drop policy if exists "site_invoice_plans_manage_access" on public.site_invoice_plans;
+create policy "site_invoice_plans_manage_access"
+on public.site_invoice_plans
+for insert
+with check (public.can_manage_site(site_id));
+
+drop policy if exists "site_invoice_plans_update_access" on public.site_invoice_plans;
+create policy "site_invoice_plans_update_access"
+on public.site_invoice_plans
+for update
+using (public.can_manage_site(site_id))
+with check (public.can_manage_site(site_id));
 
 drop policy if exists "invoices_select_access" on public.invoices;
 create policy "invoices_select_access"
@@ -1164,6 +1197,7 @@ do $$ begin alter publication supabase_realtime add table public.guest_requests;
 do $$ begin alter publication supabase_realtime add table public.logs; exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.announcements; exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.announcement_reads; exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.site_invoice_plans; exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.invoices; exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.payment_records; exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.packages; exception when duplicate_object then null; end $$;
