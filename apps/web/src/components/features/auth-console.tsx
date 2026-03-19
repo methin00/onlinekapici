@@ -237,13 +237,6 @@ export function AuthConsole() {
             {submitting ? 'Giriş yapılıyor' : 'Panele geç'}
           </button>
 
-          <div className="mt-8 rounded-md border-2 border-dashed border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-accent)]">Bilgilendirme</p>
-            <p className="mt-3 text-sm leading-6 text-[var(--color-muted)]">
-              Giriş doğrudan Supabase oturumu ile açılır. Rolü değiştirdiğinizde örnek e-posta ve parola bilgileri
-              otomatik güncellenir.
-            </p>
-          </div>
         </motion.section>
       </div>
     </main>
