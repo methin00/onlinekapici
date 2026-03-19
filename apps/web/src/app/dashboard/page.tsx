@@ -5,7 +5,7 @@ import { DashboardConsole } from '@/components/features/dashboard-console';
 export default function DashboardPage() {
   return (
     <Suspense fallback={null}>
-      <ProtectedScreen allowedRoles={['super_admin', 'concierge']}>
+      <ProtectedScreen allowedRoles={['super_admin', 'consultant']}>
         <DashboardConsole />
       </ProtectedScreen>
     </Suspense>

@@ -35,13 +35,13 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 function toastToneClass(tone: ToastTone) {
   switch (tone) {
     case 'success':
-      return 'border-emerald-700/15 bg-[#e4f4e8] text-[#245437]';
+      return 'border-[var(--color-success)] bg-[rgba(107,191,115,0.14)] text-[var(--color-text)]';
     case 'warning':
-      return 'border-amber-700/15 bg-[#fbf0dd] text-[#7a5322]';
+      return 'border-[var(--color-accent)] bg-[rgba(212,163,115,0.14)] text-[var(--color-text)]';
     case 'danger':
-      return 'border-rose-700/15 bg-[#f9e3e5] text-[#8a3139]';
+      return 'border-[var(--color-danger)] bg-[rgba(231,111,81,0.14)] text-[var(--color-text)]';
     case 'info':
-      return 'border-cyan-700/15 bg-[#e2f0f6] text-[#245875]';
+      return 'border-[var(--color-info)] bg-[rgba(107,174,214,0.14)] text-[var(--color-text)]';
   }
 }
 
@@ -92,12 +92,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="pointer-events-none fixed right-4 top-4 z-[140] flex w-[min(92vw,420px)] flex-col gap-3 md:right-6 md:top-6">
+      <div className="pointer-events-none fixed bottom-4 right-4 z-[140] flex w-[min(92vw,420px)] flex-col gap-3 md:bottom-6 md:right-6">
         {toasts.map((toast) => (
           <div
             key={toast.id}
             aria-live="polite"
-            className={`pointer-events-auto rounded-[24px] border px-5 py-4 shadow-[0_18px_36px_-24px_rgba(0,0,0,0.28)] ${toastToneClass(
+            className={`pointer-events-auto rounded-md border-2 px-5 py-4 shadow-[8px_8px_0_0_rgba(0,0,0,0.28)] ${toastToneClass(
               toast.tone
             )}`}
             role="status"
@@ -107,7 +107,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               <button
                 type="button"
                 onClick={() => dismissToast(toast.id)}
-                className="rounded-full border border-black/10 bg-white/65 px-2.5 py-1 text-xs font-semibold text-current transition hover:bg-white/90"
+                className="rounded-md border-2 border-[var(--color-line)] bg-transparent px-2.5 py-1 text-xs font-semibold text-current transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
               >
                 Kapat
               </button>

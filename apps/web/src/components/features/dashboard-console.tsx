@@ -1,755 +1,569 @@
 'use client';
 
-import Image from 'next/image';
-import { useEffect, useMemo, useState } from 'react';
-import { appFetch } from '@/lib/api';
-import { formatDateTime, guestStatusLabel, visitorTypeLabel } from '@/lib/presenters';
-import type {
-  AdminOverviewResponse,
-  AdminUsersResponse,
-  Building,
-  BuildingDetail,
-  BuildingDetailResponse,
-  BuildingDirectoryResponse,
-  GuestCall,
-  GuestStatus,
-  Province
-} from '@/lib/types';
-import { StatusPill } from '../ui/status-pill';
-import { Activity, Building2, Camera, Clock, KeySquare, PhoneCall, RefreshCw, ShieldAlert, Users, PhoneForwarded } from 'lucide-react';
-import { MetricCard } from '../ui/metric-card';
-import { SiteCreationPanel } from './site-creation-panel';
-import { BuildingDirectoryPanel } from './building-directory-panel';
-import { AdminUserDirectoryPanel } from './admin-user-directory-panel';
+import {
+  BellRing,
+  Building2,
+  Headset,
+  LayoutDashboard,
+  Megaphone,
+  Plus,
+  UserRoundCog,
+  Wrench
+} from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useAuth } from '../providers/auth-provider';
+import { usePortalData } from '../providers/portal-data-provider';
 import { useToast } from '../providers/toast-provider';
+import { BrandLogo } from '../ui/brand-logo';
+import {
+  buildUnitResidentRows,
+  formatCurrency,
+  formatDateTime,
+  getAnnouncementsForUser,
+  getRequestsForUser,
+  getServiceProvidersForUser,
+  getVisibleBuildings,
+  getVisibleSites,
+  getVisibleUnits,
+  requestStatusLabel,
+  requestTypeLabel,
+  unitLabel
+} from '@/lib/portal-selectors';
+import type { Announcement, PortalRole, ProviderCategory } from '@/lib/portal-types';
 
-type NoticeState = {
-  tone: 'success' | 'warning' | 'danger' | 'info';
-  message: string;
-} | null;
+type DashboardTab = 'overview' | 'structure' | 'assignments' | 'calls' | 'announcements' | 'services';
+type SiteForm = { name: string; address: string; district: string; city: string };
+type BuildingForm = { name: string; address: string; apiKey: string; doorLabel: string; kioskCode: string };
+type UnitForm = { unitNumber: string; floor: string; buildingId: string };
+type ResidentForm = { unitId: string; fullName: string; email: string; password: string; phone: string; title: string; loginId: string };
+type ServiceForm = { fullName: string; category: ProviderCategory; phone: string; note: string };
 
-function timelineDotClass(status: GuestStatus) {
-  switch (status) {
-    case 'approved':
-      return 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.5)]';
-    case 'rejected':
-      return 'bg-rose-400 shadow-[0_0_12px_rgba(251,113,133,0.5)]';
-    case 'escalated':
-      return 'bg-sky-400 shadow-[0_0_12px_rgba(56,189,248,0.5)]';
-    case 'waiting':
-      return 'bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.5)]';
+const EMPTY_SITE_FORM: SiteForm = { name: '', address: '', district: '', city: '' };
+const EMPTY_BUILDING_FORM: BuildingForm = { name: '', address: '', apiKey: '', doorLabel: '', kioskCode: '' };
+const EMPTY_UNIT_FORM: UnitForm = { unitNumber: '', floor: '1', buildingId: '' };
+const EMPTY_RESIDENT_FORM: ResidentForm = { unitId: '', fullName: '', email: '', password: '', phone: '', title: 'Daire Sakini', loginId: '' };
+const EMPTY_SERVICE_FORM: ServiceForm = { fullName: '', category: 'Temizlik', phone: '', note: '' };
+
+function roleTitle(role: PortalRole) {
+  switch (role) {
+    case 'super_admin':
+      return 'Sistem yönetimi';
+    case 'consultant':
+      return 'Danışman operasyonu';
+    case 'manager':
+      return 'Site yönetimi';
+    case 'resident':
+      return 'Sakin paneli';
+    case 'kiosk_device':
+      return 'Giriş terminali';
   }
 }
 
-function statusCardClass(status: GuestStatus) {
-  switch (status) {
-    case 'approved':
-      return 'border-emerald-500/20 bg-emerald-500/10 shadow-[inset_0_0_40px_rgba(16,185,129,0.05)]';
-    case 'rejected':
-      return 'border-rose-500/20 bg-rose-500/10 shadow-[inset_0_0_40px_rgba(244,63,94,0.05)]';
-    case 'escalated':
-      return 'border-sky-500/20 bg-sky-500/10 shadow-[inset_0_0_40px_rgba(14,165,233,0.05)]';
-    case 'waiting':
-      return 'border-amber-500/20 bg-amber-500/10 shadow-[inset_0_0_40px_rgba(245,158,11,0.05)]';
-  }
+function at(value?: string) {
+  return value ? new Date(value).getTime() : 0;
+}
+
+function newest<T extends { createdAt?: string }>(items: T[]) {
+  return [...items].sort((a, b) => at(b.createdAt) - at(a.createdAt));
+}
+
+function newestAnnouncements<T extends { publishedAt: string }>(items: T[]) {
+  return [...items].sort((a, b) => at(b.publishedAt) - at(a.publishedAt));
 }
 
 export function DashboardConsole() {
   const { session } = useAuth();
+  const {
+    state,
+    createAnnouncement,
+    createServiceProvider,
+    createSite,
+    updateSiteDetails,
+    deleteSite,
+    createBuilding,
+    updateBuildingDetails,
+    deleteBuilding,
+    createUnit,
+    updateUnitDetails,
+    deleteUnit,
+    createResident,
+    assignSiteManager,
+    setConsultantAssignment,
+    updateServiceProviderDetails,
+    deleteServiceProvider
+  } = usePortalData();
   const { showToast } = useToast();
-  const isSuperAdmin = session?.user.role === 'super_admin';
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sites' | 'add-site' | 'users'>('dashboard');
-  const [overview, setOverview] = useState<AdminOverviewResponse | null>(null);
-  const [provinces, setProvinces] = useState<Province[]>([]);
-  const [directoryBuildings, setDirectoryBuildings] = useState<Building[]>([]);
-  const [selectedBuildingId, setSelectedBuildingId] = useState<string | null>(null);
-  const [selectedBuilding, setSelectedBuilding] = useState<BuildingDetail | null>(null);
-  const [directoryLoading, setDirectoryLoading] = useState(false);
-  const [accountDirectory, setAccountDirectory] = useState<AdminUsersResponse>({
-    superAdmins: [],
-    concierges: []
-  });
-  const [loading, setLoading] = useState(true);
-  const [actionCallId, setActionCallId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<NoticeState>(null);
-  const [cameraTick, setCameraTick] = useState(() => new Date().toISOString());
+  const user = session?.user ?? null;
+  const isSuperAdmin = user?.role === 'super_admin';
 
-  useEffect(() => {
-    void loadOverview();
+  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
+  const [selectedSiteId, setSelectedSiteId] = useState('');
+  const [newSiteForm, setNewSiteForm] = useState<SiteForm>(EMPTY_SITE_FORM);
+  const [siteForm, setSiteForm] = useState<SiteForm>(EMPTY_SITE_FORM);
+  const [newBuildingForm, setNewBuildingForm] = useState<BuildingForm>(EMPTY_BUILDING_FORM);
+  const [buildingForms, setBuildingForms] = useState<Record<string, BuildingForm>>({});
+  const [newUnitForm, setNewUnitForm] = useState<UnitForm>(EMPTY_UNIT_FORM);
+  const [unitForms, setUnitForms] = useState<Record<string, UnitForm>>({});
+  const [residentForm, setResidentForm] = useState<ResidentForm>(EMPTY_RESIDENT_FORM);
+  const [selectedManagerId, setSelectedManagerId] = useState('');
+  const [announcementForm, setAnnouncementForm] = useState({ title: '', summary: '', category: 'Operasyon' as Announcement['category'] });
+  const [serviceForm, setServiceForm] = useState<ServiceForm>(EMPTY_SERVICE_FORM);
+  const [serviceEditForms, setServiceEditForms] = useState<Record<string, ServiceForm>>({});
 
-    const interval = window.setInterval(() => {
-      void loadOverview(false);
-    }, 5000);
-
-    return () => window.clearInterval(interval);
-  }, [isSuperAdmin]);
+  const visibleSites = useMemo(() => (user ? getVisibleSites(state, user) : []), [state, user]);
+  const visibleBuildings = useMemo(() => (user ? getVisibleBuildings(state, user) : []), [state, user]);
+  const visibleUnits = useMemo(() => (user ? getVisibleUnits(state, user) : []), [state, user]);
+  const visibleRequests = useMemo(() => (user ? getRequestsForUser(state, user) : []), [state, user]);
+  const visibleAnnouncements = useMemo(() => (user ? getAnnouncementsForUser(state, user) : []), [state, user]);
+  const visibleServices = useMemo(() => (user ? getServiceProvidersForUser(state, user) : []), [state, user]);
 
   useEffect(() => {
-    if (!isSuperAdmin || !selectedBuildingId) {
-      if (!selectedBuildingId) {
-        setSelectedBuilding(null);
-      }
+    if (!visibleSites.length) {
+      setSelectedSiteId('');
       return;
     }
 
-    void loadBuildingDetail(selectedBuildingId);
-  }, [isSuperAdmin, selectedBuildingId]);
-
-  async function loadOverview(showSpinner = true) {
-    if (showSpinner) {
-      setLoading(true);
+    if (!visibleSites.some((site) => site.id === selectedSiteId)) {
+      setSelectedSiteId(visibleSites[0].id);
     }
+  }, [selectedSiteId, visibleSites]);
 
-    try {
-      const [overviewData, locationsData, buildingsData, usersData] = await Promise.all([
-        appFetch<AdminOverviewResponse>('admin/overview'),
-        isSuperAdmin ? appFetch<Province[]>('admin/locations').catch(() => []) : Promise.resolve([]),
-        isSuperAdmin
-          ? appFetch<BuildingDirectoryResponse>('admin/buildings').catch(() => ({ data: [] }))
-          : Promise.resolve({ data: [] }),
-        isSuperAdmin
-          ? appFetch<AdminUsersResponse>('admin/users').catch(() => ({ superAdmins: [], concierges: [] }))
-          : Promise.resolve({ superAdmins: [], concierges: [] })
-      ]);
-
-      setOverview(overviewData);
-      setProvinces(locationsData);
-      setDirectoryBuildings(buildingsData.data);
-      setAccountDirectory(usersData);
-      setSelectedBuildingId((currentValue) => {
-        if (currentValue && buildingsData.data.some((building) => building.id === currentValue)) {
-          return currentValue;
-        }
-
-        return buildingsData.data[0]?.id ?? null;
-      });
-    } catch (error) {
-      setNotice({
-        tone: 'danger',
-        message: error instanceof Error ? error.message : 'Panel verileri alınamadı.'
-      });
-    } finally {
-      if (showSpinner) {
-        setLoading(false);
-      }
+  useEffect(() => {
+    if (!isSuperAdmin && ['structure', 'assignments'].includes(activeTab)) {
+      setActiveTab('overview');
     }
-  }
+  }, [activeTab, isSuperAdmin]);
 
-  async function loadBuildingDetail(buildingId: string) {
-    setDirectoryLoading(true);
-
-    try {
-      const response = await appFetch<BuildingDetailResponse>(`admin/buildings/${buildingId}`);
-      setSelectedBuilding(response.data);
-    } catch (error) {
-      setNotice({
-        tone: 'danger',
-        message: error instanceof Error ? error.message : 'Site detayları alınamadı.'
-      });
-    } finally {
-      setDirectoryLoading(false);
-    }
-  }
-
-  async function handleManualOpen(callId: string) {
-    setActionCallId(callId);
-
-    try {
-      const response = await appFetch<{ data: GuestCall; door: { ok: boolean; mode: 'http' | 'simulated' } }>(
-        `admin/calls/${callId}/manual-open`,
-        {
-          method: 'POST'
-        }
-      );
-
-      showToast({
-        tone: 'success',
-        message: `Kapı açma komutu başarıyla iletildi (${response.door.mode}).`
-      });
-      await loadOverview(false);
-    } catch (error) {
-      showToast({
-        tone: 'danger',
-        message: error instanceof Error ? error.message : 'Kapı açma komutu gönderilemedi.'
-      });
-    } finally {
-      setActionCallId(null);
-    }
-  }
-
-  async function handleConnect(callId: string) {
-    setActionCallId(callId);
-
-    try {
-      await appFetch<{ data: GuestCall }>(`admin/calls/${callId}/connect`, {
-        method: 'POST'
-      });
-
-      showToast({
-        tone: 'info',
-        message: 'Çağrı danışman görüşmesine aktarıldı.'
-      });
-      await loadOverview(false);
-    } catch (error) {
-      showToast({
-        tone: 'danger',
-        message: error instanceof Error ? error.message : 'Danışman aksiyonu tamamlanamadı.'
-      });
-    } finally {
-      setActionCallId(null);
-    }
-  }
-
-  const calls = overview?.latestCalls ?? [];
-  const fallbackCalls = overview?.fallbackCalls ?? [];
-  const buildings = overview?.buildings ?? [];
-  const featuredBuilding = useMemo(
-    () => buildings.find((building) => building.status === 'ONLINE') ?? buildings[0] ?? null,
-    [buildings]
+  const activeSite = useMemo(
+    () => visibleSites.find((site) => site.id === selectedSiteId) ?? visibleSites[0] ?? null,
+    [selectedSiteId, visibleSites]
   );
-  const cameraPreviewCall = useMemo(
-    () => calls.find((call) => call.imageUrl) ?? fallbackCalls.find((call) => call.imageUrl) ?? null,
-    [calls, fallbackCalls]
-  );
-  const cameraPreviewBuilding = useMemo(() => {
-    if (!cameraPreviewCall) {
-      return featuredBuilding;
+  const activeSiteId = activeSite?.id ?? '';
+  const siteBuildings = useMemo(() => visibleBuildings.filter((building) => building.siteId === activeSiteId), [activeSiteId, visibleBuildings]);
+  const siteBuildingIds = useMemo(() => new Set(siteBuildings.map((building) => building.id)), [siteBuildings]);
+  const siteUnits = useMemo(() => visibleUnits.filter((unit) => siteBuildingIds.has(unit.buildingId)), [siteBuildingIds, visibleUnits]);
+  const siteUnitIds = useMemo(() => new Set(siteUnits.map((unit) => unit.id)), [siteUnits]);
+  const siteRequests = useMemo(() => visibleRequests.filter((request) => siteBuildingIds.has(request.buildingId)), [siteBuildingIds, visibleRequests]);
+  const siteAnnouncements = useMemo(() => visibleAnnouncements.filter((announcement) => announcement.siteId === activeSiteId), [activeSiteId, visibleAnnouncements]);
+  const siteServices = useMemo(() => visibleServices.filter((service) => service.siteId === activeSiteId), [activeSiteId, visibleServices]);
+  const siteInvoices = useMemo(() => state.invoices.filter((invoice) => siteUnitIds.has(invoice.unitId)), [siteUnitIds, state.invoices]);
+  const siteLogs = useMemo(() => state.logs.filter((entry) => siteBuildingIds.has(entry.buildingId)).slice(0, 6), [siteBuildingIds, state.logs]);
+  const residentRows = useMemo(() => buildUnitResidentRows(state, siteBuildings, siteUnits, state.profiles), [siteBuildings, siteUnits, state]);
+  const siteResidents = useMemo(() => state.profiles.filter((profile) => (profile.role === 'resident' || profile.role === 'manager') && profile.unitId && siteUnitIds.has(profile.unitId)), [siteUnitIds, state.profiles]);
+  const managerAssignment = useMemo(() => state.managerSiteAssignments.find((assignment) => assignment.siteId === activeSiteId) ?? null, [activeSiteId, state.managerSiteAssignments]);
+  const siteManager = useMemo(() => state.profiles.find((profile) => profile.id === managerAssignment?.profileId) ?? null, [managerAssignment?.profileId, state.profiles]);
+  const siteConsultants = useMemo(() => {
+    const ids = new Set(state.consultantSiteAssignments.filter((assignment) => assignment.siteId === activeSiteId).map((assignment) => assignment.profileId));
+    return state.profiles.filter((profile) => ids.has(profile.id));
+  }, [activeSiteId, state.consultantSiteAssignments, state.profiles]);
+  const consultantProfiles = useMemo(() => state.profiles.filter((profile) => profile.role === 'consultant'), [state.profiles]);
+  const openCalls = useMemo(() => siteRequests.filter((request) => request.status === 'pending' || request.status === 'redirected'), [siteRequests]);
+  const callMatches = useMemo(() => openCalls.map((request, index) => ({ request, consultant: siteConsultants.length ? siteConsultants[index % siteConsultants.length] ?? null : null })), [openCalls, siteConsultants]);
+  const unpaidTotal = useMemo(() => siteInvoices.filter((invoice) => invoice.status !== 'paid').reduce((sum, invoice) => sum + invoice.amount, 0), [siteInvoices]);
+
+  useEffect(() => {
+    if (!activeSite) {
+      return;
     }
 
-    return buildings.find((building) => building.id === cameraPreviewCall.buildingId) ?? featuredBuilding;
-  }, [buildings, cameraPreviewCall, featuredBuilding]);
+    setSiteForm({ name: activeSite.name, address: activeSite.address, district: activeSite.district, city: activeSite.city });
+    setBuildingForms(Object.fromEntries(siteBuildings.map((building) => [building.id, { name: building.name, address: building.address, apiKey: building.apiKey, doorLabel: building.doorLabel, kioskCode: building.kioskCode }])));
+    setUnitForms(Object.fromEntries(siteUnits.map((unit) => [unit.id, { unitNumber: unit.unitNumber, floor: String(unit.floor), buildingId: unit.buildingId }])));
+    setNewUnitForm((current) => ({ ...current, buildingId: current.buildingId || siteBuildings[0]?.id || '' }));
+    setResidentForm((current) => ({ ...current, unitId: current.unitId || siteUnits[0]?.id || '' }));
+    setSelectedManagerId(managerAssignment?.profileId ?? '');
+    setServiceEditForms(Object.fromEntries(siteServices.map((service) => [service.id, { fullName: service.fullName, category: service.category, phone: service.phone, note: service.note }])));
+  }, [activeSite, managerAssignment?.profileId, siteBuildings, siteServices, siteUnits]);
 
-  return (
-    <main className="min-h-screen bg-[var(--bg-deep)] text-white selection:bg-cyan-500/20">
-      <div className="app-shell py-8 md:py-12">
-        <div className="grid gap-8 xl:grid-cols-[320px_minmax(0,1fr)]">
+  if (!user) {
+    return null;
+  }
 
-          {/* SIDEBAR */}
-          <aside
-            className={`glass-panel flex h-fit flex-col gap-6 rounded-[32px] p-5 sm:gap-8 sm:p-8 xl:sticky xl:top-8 ${
-              isSuperAdmin ? '' : 'order-2 xl:order-1'
-            }`}
-          >
-            <div>
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-2.5 rounded-2xl border border-cyan-500/20 bg-cyan-500/10">
-                  <Activity className="w-5 h-5 text-cyan-400" />
-                </div>
+  const menuItems = ([{ id: 'overview', label: 'Genel görünüm', icon: LayoutDashboard }, isSuperAdmin ? { id: 'structure', label: 'Yerleşim', icon: Building2 } : null, isSuperAdmin ? { id: 'assignments', label: 'Atamalar', icon: UserRoundCog } : null, { id: 'calls', label: 'Görüşmeler', icon: Headset }, { id: 'announcements', label: 'Duyurular', icon: Megaphone }, { id: 'services', label: 'Hizmetler', icon: Wrench }] as const).filter(Boolean) as Array<{ id: DashboardTab; label: string; icon: typeof LayoutDashboard }>;
+
+  async function run(task: () => Promise<void>, successMessage: string, tone: 'success' | 'info' = 'success') {
+    try {
+      await task();
+      showToast({ tone, message: successMessage });
+    } catch (error) {
+      showToast({ tone: 'danger', message: error instanceof Error ? error.message : 'İşlem tamamlanamadı.' });
+    }
+  }
+
+  let content: ReactNode = null;
+
+  if (activeTab === 'overview') {
+    content = (
+      <div className="space-y-6">
+        {isSuperAdmin ? (
+          <section className="app-card p-5">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="app-kicker">Yeni site</p>
+                <h3 className="mt-2 font-heading text-2xl font-bold">Site ekle</h3>
               </div>
-              <h1 className="mb-5 font-heading text-3xl font-bold tracking-tight text-white sm:mb-6 sm:text-4xl">
-                {isSuperAdmin ? 'Sistem Yönetimi' : 'Operasyon Merkezi'}
-              </h1>
-
-              {isSuperAdmin && (
-                <div className="flex flex-col gap-2 border-y border-white/10 py-6 mb-4">
-                  <button
-                    onClick={() => setActiveTab('dashboard')}
-                    className={`text-left px-5 py-3 rounded-xl text-sm font-semibold transition-all ${activeTab === 'dashboard' ? 'border border-cyan-700/20 bg-cyan-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-                  >
-                    Canlı İzleme
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('sites')}
-                    className={`text-left px-5 py-3 rounded-xl text-sm font-semibold transition-all ${activeTab === 'sites' ? 'border border-stone-700/20 bg-[var(--text-primary)] text-[var(--bg-surface)]' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-                  >
-                    Siteler, Apartmanlar ve Daireler
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('add-site')}
-                    className={`text-left px-5 py-3 rounded-xl text-sm font-semibold transition-all ${activeTab === 'add-site' ? 'border border-amber-700/20 bg-amber-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-                  >
-                    Yeni Site Ekle
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('users')}
-                    className={`text-left px-5 py-3 rounded-xl text-sm font-semibold transition-all ${activeTab === 'users' ? 'border border-emerald-700/20 bg-emerald-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-white/5'}`}
-                  >
-                    Kullanıcı / Danışman Yönetimi
-                  </button>
-                </div>
-              )}
-
-              <p className="text-sm leading-relaxed text-zinc-400">
-                {isSuperAdmin
-                  ? 'Tüm bağlı lokasyonları ve kullanıcı yetkilerini yönetin.'
-                  : 'Gece odaklı panel. Binalar, çağrılar ve manuel müdahaleler tek akışta izlenir.'}
-              </p>
+              <Plus className="h-5 w-5 text-[var(--color-accent)]" />
             </div>
-
-            <div className="space-y-4">
-              <h3 className="text-sm font-medium text-zinc-300 flex items-center gap-2 mb-2">
-                <Building2 className="w-4 h-4 text-zinc-500" /> Bağlı Lokasyonlar
-              </h3>
-              {buildings.length ? (
-                buildings.map((building) => (
-                  <div
-                    className="group relative overflow-hidden rounded-[24px] border border-white/5 bg-white/5 px-4 py-4 pl-9 transition-all hover:border-white/10 hover:bg-white/10 sm:px-5 sm:py-5 sm:pl-10"
-                    key={building.id}
-                  >
-                    <span
-                      className={`absolute bottom-5 left-4 top-5 w-[3px] rounded-full shadow-[0_0_12px_currentColor] ${building.status === 'ONLINE' ? 'bg-emerald-400 text-emerald-400' : 'bg-rose-400 text-rose-400'
-                        }`}
-                    />
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="font-heading text-lg font-semibold tracking-tight text-white transition-colors group-hover:text-cyan-300 sm:text-xl">{building.name}</p>
-                        <StatusPill
-                          label={building.status === 'ONLINE' ? 'Online' : 'Offline'}
-                          tone={building.status === 'ONLINE' ? 'success' : 'danger'}
-                        />
-                      </div>
-                      <p className="text-xs leading-relaxed text-zinc-400">{building.district?.name ?? 'İlçe bilgisi yok'}</p>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-[24px] border border-dashed border-white/10 bg-white/5 px-6 py-8 text-center text-sm text-zinc-500">
-                  Bina verisi bulunmuyor.
-                </div>
-              )}
+            <div className="mt-5 grid gap-3 lg:grid-cols-[1fr_1.2fr_0.7fr_0.7fr_auto]">
+              <input className="app-input px-4 py-4" value={newSiteForm.name} onChange={(event) => setNewSiteForm((current) => ({ ...current, name: event.target.value }))} placeholder="Site adı" type="text" />
+              <input className="app-input px-4 py-4" value={newSiteForm.address} onChange={(event) => setNewSiteForm((current) => ({ ...current, address: event.target.value }))} placeholder="Adres" type="text" />
+              <input className="app-input px-4 py-4" value={newSiteForm.district} onChange={(event) => setNewSiteForm((current) => ({ ...current, district: event.target.value }))} placeholder="İlçe" type="text" />
+              <input className="app-input px-4 py-4" value={newSiteForm.city} onChange={(event) => setNewSiteForm((current) => ({ ...current, city: event.target.value }))} placeholder="Şehir" type="text" />
+              <button type="button" onClick={() => void run(async () => { await createSite(newSiteForm); setNewSiteForm(EMPTY_SITE_FORM); }, 'Site oluşturuldu.')} className="app-button px-5 py-4 text-sm uppercase tracking-[0.16em]">Ekle</button>
             </div>
+          </section>
+        ) : null}
 
-            <div className="mt-auto rounded-[24px] glass-card p-5 sm:p-6">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 flex items-center gap-2">
-                <ShieldAlert className="w-3 h-3 text-amber-500" /> Aktif Odak
-              </p>
-              <p className="mt-3 font-heading text-xl font-bold tracking-tight text-white sm:text-2xl">
-                {featuredBuilding?.name ?? 'Atanmış bina yok'}
-              </p>
-              <p className="mt-3 text-xs leading-relaxed text-zinc-400">
-                Tüm çağrılar bina kimliği ile ayrıştırılır. Yetkili kullanıcı yalnızca kendi kapsamındaki kayıtları görür.
-              </p>
+        <div className="metric-grid lg:grid-cols-4">
+          <div className="app-card p-5"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">Blok</p><p className="mt-3 font-heading text-4xl font-bold">{siteBuildings.length}</p></div>
+          <div className="app-card p-5"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">Daire</p><p className="mt-3 font-heading text-4xl font-bold">{siteUnits.length}</p></div>
+          <div className="app-card p-5"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">Açık görüşme</p><p className="mt-3 font-heading text-4xl font-bold">{openCalls.length}</p></div>
+          <div className="app-card p-5"><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">Açık bakiye</p><p className="mt-3 font-heading text-4xl font-bold">{formatCurrency(unpaidTotal)}</p></div>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-2">
+          <section className="app-card p-5">
+            <p className="app-kicker">Site detayı</p>
+            <h3 className="mt-2 font-heading text-2xl font-bold">{activeSite?.name ?? 'Site seçin'}</h3>
+            <p className="mt-4 text-sm leading-7 text-[var(--color-muted)]">{activeSite?.address}</p>
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4"><p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">Yönetici</p><p className="mt-3 font-semibold">{siteManager?.fullName ?? 'Atanmadı'}</p></div>
+              <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4"><p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">Danışman</p><p className="mt-3 font-semibold">{siteConsultants.length}</p></div>
             </div>
-          </aside>
-
-          {/* MAIN SECTION */}
-          <section className={`min-w-0 space-y-8 ${isSuperAdmin ? '' : 'order-1 xl:order-2'}`}>
-            {activeTab === 'dashboard' ? (
+            {isSuperAdmin ? (
               <>
-                {/* HEADER AREA */}
-                <header className="glass-panel rounded-[32px] px-5 py-6 sm:px-8 sm:py-8">
-                  <div className="flex flex-wrap items-start justify-between gap-6 sm:items-end">
-                    <div className="max-w-2xl">
-                      <div className="flex items-center gap-2 mb-3">
-                        <span className="w-2 h-2 rounded-full bg-cyan-500" />
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-cyan-400/80">Canlı Operasyon</p>
-                      </div>
-                      <h2 className="font-heading text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl lg:leading-[1.1]">
-                        Kapı Akışı ve <br className="hidden sm:block" /><span className="text-[var(--brand-primary)]">Danışma Müdahalesi</span>
-                      </h2>
-                      <p className="mt-4 text-base leading-relaxed text-zinc-400 max-w-xl">
-                        Bekleyen çağrılar, düşen talepler ve kamera görüntüsü aynı yüzeyde tutulur. Böylece danışman
-                        aksiyonu gecikmeden alınır.
-                      </p>
-                    </div>
-                    <button
-                      className="btn-surface group flex w-full items-center justify-center gap-2 rounded-full px-6 py-3.5 text-sm font-semibold sm:w-auto"
-                      onClick={() => {
-                        setCameraTick(new Date().toISOString());
-                        void loadOverview(false);
-                      }}
-                      type="button"
-                    >
-                      <RefreshCw className="w-4 h-4 text-zinc-400 group-hover:text-white transition-colors group-hover:rotate-180 duration-500" />
-                      Görünümü Yenile
-                    </button>
-                  </div>
-
-                  {notice ? (
-                    <div className="mt-6 rounded-[20px] border border-white/10 bg-white/5 p-4">
-                      <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-                        <p className="text-sm font-medium text-white/90">{notice.message}</p>
-                        <StatusPill label="Sistem" tone={notice.tone} />
-                      </div>
-                    </div>
-                  ) : null}
-                </header>
-
-                {/* METRICS */}
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <MetricCard
-                    label="Bağlı Bina"
-                    value={overview?.metrics.totalBuildings ?? 0}
-                    detail={`${overview?.metrics.onlineBuildings ?? 0} bina şu anda çevrimiçi.`}
-                    icon={Building2}
-                  />
-                  <MetricCard
-                    label="Bekleyen"
-                    value={overview?.metrics.waitingCalls ?? 0}
-                    detail="Sakin kararını bekleyen aktif talepler."
-                    icon={Clock}
-                  />
-                  <MetricCard
-                    label="Düşen Çağrı"
-                    value={overview?.metrics.droppedCalls ?? 0}
-                    detail="Red veya zaman aşımı sonrası."
-                    icon={PhoneForwarded}
-                  />
-                  <MetricCard
-                    label="Onay Oranı"
-                    value={`${overview?.metrics.approvalRate ?? 0}%`}
-                    detail="Karara bağlanan çağrıların onay payı."
-                    icon={Activity}
-                  />
+                <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                  <input className="app-input px-4 py-4" value={siteForm.name} onChange={(event) => setSiteForm((current) => ({ ...current, name: event.target.value }))} placeholder="Site adı" type="text" />
+                  <input className="app-input px-4 py-4" value={siteForm.district} onChange={(event) => setSiteForm((current) => ({ ...current, district: event.target.value }))} placeholder="İlçe" type="text" />
+                  <input className="app-input px-4 py-4 lg:col-span-2" value={siteForm.address} onChange={(event) => setSiteForm((current) => ({ ...current, address: event.target.value }))} placeholder="Adres" type="text" />
+                  <input className="app-input px-4 py-4" value={siteForm.city} onChange={(event) => setSiteForm((current) => ({ ...current, city: event.target.value }))} placeholder="Şehir" type="text" />
                 </div>
-
-                {/* SPLIT VIEWS */}
-                <div className="grid gap-6 sm:gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-                  {/* TIMELINE */}
-                  <section className="glass-panel flex min-h-0 flex-col rounded-[32px] p-5 sm:p-8 lg:min-h-[500px]">
-                    <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:mb-8 sm:flex-row sm:items-center">
-                      <div className="flex items-start gap-4">
-                        <div className="p-3 rounded-2xl bg-white/5 border border-white/10">
-                          <Clock className="w-6 h-6 text-amber-400" />
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-400/80">Zaman Çizgisi</p>
-                          <h3 className="font-heading mt-1 text-2xl font-bold tracking-tight text-white">Operasyon Akışı</h3>
-                        </div>
-                      </div>
-                      <StatusPill label={`${calls.length} Olay`} tone="neutral" />
-                    </div>
-
-                    <div className="flex-1 space-y-6">
-                      {loading ? (
-                        <div className="h-full rounded-[24px] border border-dashed border-white/10 flex items-center justify-center text-sm text-zinc-500">
-                          Operasyon akışı yükleniyor...
-                        </div>
-                      ) : calls.length ? (
-                        calls.map((call, index) => {
-                          const callBuilding = buildings.find((building) => building.id === call.buildingId);
-
-                          return (
-                            <div className="relative pl-8 sm:pl-10" key={call.id}>
-                              {index < calls.length - 1 ? (
-                                <span className="absolute left-[9px] top-5 h-[calc(100%+8px)] w-[2px] bg-white/10 sm:left-[11px] sm:top-6" />
-                              ) : null}
-                              <span className={`absolute left-0 top-3 h-5 w-5 rounded-full border-4 border-[var(--bg-deep)] sm:h-6 sm:w-6 ${timelineDotClass(call.status)}`} />
-
-                              <div className={`rounded-[24px] border p-4 transition-all hover:scale-[1.01] sm:p-5 ${statusCardClass(call.status)}`}>
-                                <div className="mb-2 flex flex-wrap items-start justify-between gap-3 sm:flex-nowrap">
-                                  <div className="min-w-0">
-                                    <h4 className="font-heading text-lg font-bold tracking-tight text-white sm:text-xl">
-                                      {call.visitorLabel}
-                                    </h4>
-                                  </div>
-                                  <StatusPill className="shrink-0" label={guestStatusLabel(call.status)} tone={call.status === 'approved' ? 'success' : call.status === 'rejected' ? 'danger' : call.status === 'escalated' ? 'info' : 'warning'} />
-                                </div>
-                                <p className="mt-2 flex items-center gap-2 text-sm font-medium text-zinc-400">
-                                  <Building2 className="w-4 h-4 text-zinc-500" />
-                                  <span>{callBuilding?.name ?? 'Bilinmeyen Site'}</span>
-                                </p>
-                                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/20 px-3 py-3 text-sm text-zinc-400 sm:gap-4 sm:px-4 sm:py-2">
-                                  <span className="flex items-center gap-1.5 font-medium"><Users className="w-3.5 h-3.5" />Konum {call.unitNumber}</span>
-                                  <span className="hidden h-1 w-1 rounded-full bg-zinc-600 sm:block" />
-                                  <span>{call.residentName}</span>
-                                  <span className="hidden h-1 w-1 rounded-full bg-zinc-600 sm:block" />
-                                  <span className="text-zinc-300 font-medium">{visitorTypeLabel(call.visitorType)}</span>
-                                </div>
-                                <p className="mt-4 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                                  {formatDateTime(call.decidedAt ?? call.createdAt)}
-                                </p>
-                              </div>
-                            </div>
-                          );
-                        })
-                      ) : (
-                        <div className="h-full rounded-[24px] border border-dashed border-white/10 flex items-center justify-center text-sm text-zinc-500 p-8 text-center">
-                          Görüntülenecek çağrı bulunmuyor.
-                        </div>
-                      )}
-                    </div>
-                  </section>
-
-                  {/* RIGHT COLUMN */}
-                  <div className="flex flex-col gap-8">
-                    {/* CAMERA STREAM */}
-                    <section className="glass-panel overflow-hidden rounded-[32px] p-2">
-                      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6 sm:py-6">
-                        <div className="flex items-start gap-3">
-                          <div className="p-2 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
-                            <Camera className="w-5 h-5 text-cyan-400" />
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-400/80">Kamera Akışı</p>
-                            <h3 className="font-heading mt-1 text-xl font-bold tracking-tight text-white">Lobi Görüntüsü</h3>
-                          </div>
-                        </div>
-                        <StatusPill label="720p LIVE" tone="success" />
-                      </div>
-
-                      {cameraPreviewCall?.imageUrl ? (
-                        <div className="relative mx-2 mb-2 overflow-hidden rounded-[24px] border border-white/10 bg-black">
-                          <Image
-                            alt="Kapı kamerası ön izlemesi"
-                            className="h-[280px] w-full object-cover"
-                            height={280}
-                            src={cameraPreviewCall.imageUrl}
-                            width={1200}
-                          />
-                          <div className="absolute left-4 top-4 rounded-full bg-black/75 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white">
-                            Canlı Ön İzleme
-                          </div>
-                          <div className="absolute inset-x-4 bottom-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="inline-flex items-center gap-2 rounded-full bg-black/75 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white">
-                                <span className="h-2 w-2 rounded-full bg-red-500" />
-                                REC
-                              </span>
-                              <span className="rounded-full bg-black/75 px-3 py-1.5 text-xs font-medium text-white">
-                                {formatDateTime(cameraTick)}
-                              </span>
-                            </div>
-                            <div className="rounded-2xl bg-black/75 px-4 py-3 text-left text-white sm:max-w-[220px] sm:text-right">
-                              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-300">Site</p>
-                              <p className="mt-1 text-sm font-semibold">{cameraPreviewBuilding?.name ?? 'Bilinmeyen Site'}</p>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="mx-2 mb-2 flex h-[280px] flex-col items-center justify-center rounded-[24px] border border-dashed border-white/10 bg-[var(--bg-elevated)] px-6 text-center">
-                          <Camera className="h-10 w-10 text-zinc-500" />
-                          <p className="mt-4 text-base font-semibold text-white">Canlı ön izleme bekleniyor</p>
-                          <p className="mt-2 max-w-sm text-sm leading-relaxed text-zinc-400">
-                            Yeni ziyaret kaydı geldiğinde kamera görüntüsü burada gösterilecektir.
-                          </p>
-                        </div>
-                      )}
-                    </section>
-
-                    {/* FALLBACK CALLS */}
-                    <section className="glass-panel flex-1 rounded-[32px] p-5 sm:p-8">
-                      <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
-                        <div className="flex items-start gap-4">
-                          <div className="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20">
-                            <PhoneCall className="w-5 h-5 text-blue-400" />
-                          </div>
-                          <div>
-                            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-400/80">Düşen Çağrılar</p>
-                            <h3 className="font-heading mt-1 text-xl font-bold tracking-tight text-white">Danışma Kuyruğu</h3>
-                          </div>
-                        </div>
-                        <StatusPill label={`${fallbackCalls.length} Bekleyen`} tone="info" />
-                      </div>
-
-                      <div className="space-y-3">
-                        {fallbackCalls.length ? (
-                          fallbackCalls.map((call) => {
-                            const callBuilding = buildings.find(b => b.id === call.buildingId);
-
-                            return (
-                              <div
-                                className="group rounded-[20px] border border-white/5 bg-white-[0.02] px-4 py-4 transition-colors hover:bg-white/5 sm:px-5"
-                                key={call.id}
-                              >
-                                <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                  <div className="min-w-0">
-                                    <p className="font-semibold text-white tracking-tight">{call.visitorLabel}</p>
-                                    <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-                                      <Building2 className="w-3 h-3" />
-                                      <span className="text-zinc-300">{callBuilding?.name ?? 'Bilinmeyen Site'}</span>
-                                      <span className="hidden h-1 w-1 rounded-full bg-zinc-700 sm:block" />
-                                      Konum {call.unitNumber}
-                                      <span className="hidden h-1 w-1 rounded-full bg-zinc-700 sm:block" />
-                                      {call.residentName}
-                                    </p>
-                                  </div>
-                                  <StatusPill className="shrink-0" label={guestStatusLabel(call.status)} tone={call.status === 'rejected' ? 'danger' : 'info'} />
-                                </div>
-                              </div>
-                            );
-                          })
-                        ) : (
-                          <div className="rounded-[20px] border border-dashed border-white/10 bg-white/5 px-6 py-10 text-center text-sm text-zinc-500">
-                            Şu anda danışmaya düşen çağrı bulunmuyor.
-                          </div>
-                        )}
-                      </div>
-                    </section>
-                  </div>
+                <div className="mt-4 flex gap-3">
+                  <button type="button" onClick={() => void run(() => updateSiteDetails({ siteId: activeSiteId, ...siteForm }), 'Site güncellendi.')} className="app-button px-4 py-3 text-xs uppercase tracking-[0.16em]">Kaydet</button>
+                  <button type="button" onClick={() => void run(() => deleteSite(activeSiteId), 'Site silindi.', 'info')} className="app-button-secondary px-4 py-3 text-xs uppercase tracking-[0.16em]">Sil</button>
                 </div>
-
-                {/* ACTION CARDS (Anlık Müdahale) */}
-                <section className="glass-panel mt-6 rounded-[32px] p-5 sm:mt-8 sm:p-8">
-                  <div className="mb-6 flex flex-col items-start justify-between gap-3 sm:mb-8 sm:flex-row sm:items-center">
-                    <div className="flex items-start gap-4">
-                      <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 shadow-[0_0_30px_rgba(245,158,11,0.1)]">
-                        <KeySquare className="w-6 h-6 text-amber-500" />
-                      </div>
-                      <div>
-                        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-500/80">Anlık Müdahale</p>
-                        <h3 className="font-heading mt-1 text-2xl font-bold tracking-tight text-white">Operasyon Kartları</h3>
-                      </div>
-                    </div>
-                    <StatusPill label={`${calls.length} Aktif Akış`} tone="warning" />
-                  </div>
-
-                  <div className="relative z-10 grid gap-4 sm:gap-6 xl:grid-cols-2">
-                    {loading ? (
-                      <div className="col-span-full rounded-[24px] border border-dashed border-white/10 px-6 py-12 text-center text-sm text-zinc-500">
-                        Operasyon kartları yükleniyor...
-                      </div>
-                    ) : calls.length ? (
-                      calls.map((call) => (
-                        <div className={`flex flex-col justify-between gap-6 rounded-[28px] border p-5 transition-all hover:-translate-y-1 sm:p-6 ${statusCardClass(call.status)}`} key={call.id}>
-                          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                            <div className="min-w-0">
-                              <div className="flex flex-wrap items-center gap-3 mb-2">
-                                <h4 className="font-heading text-xl font-bold tracking-tight text-white sm:text-2xl">
-                                  {call.visitorLabel}
-                                </h4>
-                                <span className="px-2 py-1 rounded bg-white/10 text-xs font-medium text-zinc-300">
-                                  {visitorTypeLabel(call.visitorType)}
-                                </span>
-                              </div>
-                              {(() => {
-                                const callBuilding = buildings.find(b => b.id === call.buildingId);
-                                return (
-                                  <p className="flex flex-wrap items-center gap-2 text-sm leading-relaxed text-zinc-400">
-                                    <Building2 className="w-4 h-4 text-zinc-500 shrink-0" />
-                                    <span className="text-zinc-300">{callBuilding?.name ?? 'Bilinmeyen Site'}</span>
-                                    <span className="hidden h-1 w-1 rounded-full bg-zinc-600 sm:block" />
-                                    Konum {call.unitNumber}
-                                    <span className="hidden h-1 w-1 rounded-full bg-zinc-600 sm:block" />
-                                    {call.residentName}
-                                  </p>
-                                );
-                              })()}
-                            </div>
-                            <StatusPill
-                              className="shrink-0"
-                              label={guestStatusLabel(call.status)}
-                              tone={
-                                call.status === 'approved'
-                                  ? 'success'
-                                  : call.status === 'rejected'
-                                    ? 'danger'
-                                    : call.status === 'escalated'
-                                      ? 'info'
-                                      : 'warning'
-                              }
-                            />
-                          </div>
-
-                          <div className="flex flex-col items-stretch gap-3 border-t border-white/10 pt-4 sm:flex-row sm:flex-wrap sm:items-center">
-                            <button
-                              className="btn-premium flex w-full min-w-0 items-center justify-center gap-2 rounded-xl px-5 py-4 text-sm font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50 disabled:grayscale sm:flex-1"
-                              disabled={actionCallId === call.id}
-                              onClick={() => void handleManualOpen(call.id)}
-                              type="button"
-                            >
-                              <KeySquare className="w-4 h-4" />
-                              {actionCallId === call.id ? 'İşleniyor...' : 'Kapıyı Uzaktan Aç'}
-                            </button>
-                            <button
-                              className="btn-surface flex w-full min-w-0 items-center justify-center gap-2 rounded-xl px-5 py-4 text-sm font-semibold transition-all hover:border-blue-500/30 hover:bg-blue-500/10 hover:text-blue-400 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-1"
-                              disabled={actionCallId === call.id}
-                              onClick={() => void handleConnect(call.id)}
-                              type="button"
-                            >
-                              <PhoneCall className="w-4 h-4" />
-                              Görüşmeyi Devral
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="col-span-full rounded-[24px] border border-dashed border-white/10 px-6 py-12 text-center text-sm text-zinc-500">
-                        Müdahale gerektiren aktif çağrı bulunmuyor.
-                      </div>
-                    )}
-                  </div>
-                </section>
               </>
-            ) : activeTab === 'sites' ? (
-              <>
-                <header className="glass-panel rounded-[32px] px-8 py-8">
-                  <div className="max-w-2xl">
-                    <div className="flex items-center gap-2 mb-3">
-                      <span className="w-2 h-2 rounded-full bg-[var(--text-primary)]" />
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-300">Operasyon Haritası</p>
-                    </div>
-                    <h2 className="font-heading text-4xl font-bold tracking-tight text-white">Site, apartman ve daire listesi</h2>
-                    <p className="mt-4 text-base leading-relaxed text-zinc-400 max-w-xl">
-                      Tüm siteleri, blok yapılarını, apartman tablet girişlerini ve daire doluluk durumunu tek ekrandan inceleyin.
-                    </p>
-                  </div>
-                </header>
+            ) : null}
+          </section>
 
-                <BuildingDirectoryPanel
-                  buildings={directoryBuildings}
-                  selectedBuildingId={selectedBuildingId}
-                  selectedBuilding={selectedBuilding}
-                  loading={directoryLoading}
-                  onSelect={(buildingId) => {
-                    setSelectedBuildingId(buildingId);
-                    void loadBuildingDetail(buildingId);
-                  }}
-                  onUpdated={async (buildingId) => {
-                    await loadOverview(false);
-                    if (buildingId) {
-                      setSelectedBuildingId(buildingId);
-                      await loadBuildingDetail(buildingId);
-                    }
-                  }}
-                />
-              </>
-            ) : activeTab === 'add-site' ? (
-                <header className="glass-panel rounded-[32px] px-8 py-8">
-                  <div className="max-w-2xl">
-                    <div className="flex items-center gap-2 mb-3">
-                    <span className="w-2 h-2 rounded-full bg-amber-500" />
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-400/80">Sistem Genişlemesi</p>
+          <section className="app-card p-5">
+            <p className="app-kicker">Canlı akış</p>
+            <h3 className="mt-2 font-heading text-2xl font-bold">Ziyaretçi, sakin ve yayınlar</h3>
+            <div className="mt-5 space-y-3">
+              {siteRequests.slice(0, 3).map((request) => (
+                <div key={request.id} className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div><p className="font-semibold">{request.guestName}</p><p className="mt-1 text-sm text-[var(--color-muted)]">{requestTypeLabel(request.type)} · {unitLabel(state, request.unitId)}</p></div>
+                    <span className="text-xs font-semibold text-[var(--color-accent)]">{requestStatusLabel(request.status)}</span>
                   </div>
-                  <h2 className="font-heading text-4xl font-bold tracking-tight text-white">
-                    Yeni Site Tanımlama
-                  </h2>
-                  <p className="mt-4 text-base leading-relaxed text-zinc-400 max-w-xl">
-                    Yeni bir rezidans, site veya bağımsız binayı sisteme dahil edin ve yönetimini başlatın.
-                  </p>
+                  <p className="mt-3 text-xs text-[var(--color-muted)]">{formatDateTime(request.createdAt)}</p>
                 </div>
-
-                <div className="mt-8 relative z-10">
-                  <SiteCreationPanel
-                    provinces={provinces}
-                    onCreated={async () => {
-                      await loadOverview(false);
-                      if (selectedBuildingId) {
-                        await loadBuildingDetail(selectedBuildingId);
-                      }
-                    }}
-                  />
+              ))}
+              {newest(siteResidents).slice(0, 2).map((resident) => (
+                <div key={resident.id} className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+                  <p className="font-semibold">{resident.fullName}</p>
+                  <p className="mt-1 text-sm text-[var(--color-muted)]">{resident.unitId ? unitLabel(state, resident.unitId) : 'Daire eşleşmesi yok'}</p>
                 </div>
-              </header>
-            ) : (
-              <>
-                <header className="glass-panel rounded-[32px] px-8 py-8">
-                  <div className="max-w-2xl">
-                    <div className="flex items-center gap-2 mb-3">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-400/80">Güvenlik ve Yetki</p>
-                    </div>
-                    <h2 className="font-heading text-4xl font-bold tracking-tight text-white">Danışman ve yönetici listesi</h2>
-                    <p className="mt-4 text-base leading-relaxed text-zinc-400 max-w-xl">
-                      Merkezi yetkileri yönetin, ilk şifreleri görüntüleyin ve saha ekiplerinin atamalarını düzenleyin.
-                    </p>
-                  </div>
-                </header>
-
-                <AdminUserDirectoryPanel
-                  superAdmins={accountDirectory.superAdmins}
-                  concierges={accountDirectory.concierges}
-                  buildings={directoryBuildings}
-                  onCreated={async () => {
-                    await loadOverview(false);
-                  }}
-                />
-              </>
-            )}
+              ))}
+              {newestAnnouncements(siteAnnouncements).slice(0, 2).map((announcement) => (
+                <div key={announcement.id} className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+                  <p className="font-semibold">{announcement.title}</p>
+                  <p className="mt-2 text-sm leading-6 text-[var(--color-muted)]">{announcement.summary}</p>
+                </div>
+              ))}
+            </div>
           </section>
         </div>
+      </div>
+    );
+  }
+
+  if (activeTab === 'structure' && isSuperAdmin) {
+    content = (
+      <div className="space-y-6">
+        <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
+          <section className="app-card p-5">
+            <p className="app-kicker">Yeni sakin</p>
+            <h3 className="mt-2 font-heading text-2xl font-bold">Sakin hesabı aç</h3>
+            <div className="mt-5 space-y-3">
+              <select className="app-select px-4 py-4" value={residentForm.unitId} onChange={(event) => setResidentForm((current) => ({ ...current, unitId: event.target.value }))}>{siteUnits.map((unit) => <option key={unit.id} value={unit.id}>{unitLabel(state, unit.id)}</option>)}</select>
+              <input className="app-input px-4 py-4" value={residentForm.fullName} onChange={(event) => setResidentForm((current) => ({ ...current, fullName: event.target.value }))} placeholder="Ad soyad" type="text" />
+              <div className="grid gap-3 md:grid-cols-2">
+                <input className="app-input px-4 py-4" value={residentForm.phone} onChange={(event) => setResidentForm((current) => ({ ...current, phone: event.target.value }))} placeholder="Telefon" type="text" />
+                <input className="app-input px-4 py-4" value={residentForm.loginId} onChange={(event) => setResidentForm((current) => ({ ...current, loginId: event.target.value }))} placeholder="Giriş kimliği" type="text" />
+              </div>
+              <input className="app-input px-4 py-4" value={residentForm.email} onChange={(event) => setResidentForm((current) => ({ ...current, email: event.target.value }))} placeholder="E-posta" type="email" />
+              <div className="grid gap-3 md:grid-cols-2">
+                <input className="app-input px-4 py-4" value={residentForm.password} onChange={(event) => setResidentForm((current) => ({ ...current, password: event.target.value }))} placeholder="Geçici şifre" type="text" />
+                <input className="app-input px-4 py-4" value={residentForm.title} onChange={(event) => setResidentForm((current) => ({ ...current, title: event.target.value }))} placeholder="Unvan" type="text" />
+              </div>
+              <button type="button" onClick={() => void run(async () => { await createResident(residentForm); setResidentForm({ ...EMPTY_RESIDENT_FORM, unitId: siteUnits[0]?.id ?? '' }); }, 'Yeni sakin oluşturuldu.')} className="app-button w-full px-5 py-4 text-sm uppercase tracking-[0.16em]">Sakin ekle</button>
+            </div>
+          </section>
+
+          <section className="app-card p-5">
+            <p className="app-kicker">Blok ve daire</p>
+            <h3 className="mt-2 font-heading text-2xl font-bold">Yerleşim CRUD</h3>
+            <div className="mt-5 grid gap-3 lg:grid-cols-2">
+              <input className="app-input px-4 py-4" value={newBuildingForm.name} onChange={(event) => setNewBuildingForm((current) => ({ ...current, name: event.target.value }))} placeholder="Blok adı" type="text" />
+              <input className="app-input px-4 py-4" value={newBuildingForm.doorLabel} onChange={(event) => setNewBuildingForm((current) => ({ ...current, doorLabel: event.target.value }))} placeholder="Kapı etiketi" type="text" />
+              <input className="app-input px-4 py-4 lg:col-span-2" value={newBuildingForm.address} onChange={(event) => setNewBuildingForm((current) => ({ ...current, address: event.target.value }))} placeholder="Blok adresi" type="text" />
+              <input className="app-input px-4 py-4" value={newBuildingForm.apiKey} onChange={(event) => setNewBuildingForm((current) => ({ ...current, apiKey: event.target.value }))} placeholder="API anahtarı" type="text" />
+              <input className="app-input px-4 py-4" value={newBuildingForm.kioskCode} onChange={(event) => setNewBuildingForm((current) => ({ ...current, kioskCode: event.target.value }))} placeholder="Terminal kodu" type="text" />
+            </div>
+            <div className="mt-4 flex gap-3">
+              <button type="button" onClick={() => void run(async () => { await createBuilding({ siteId: activeSiteId, ...newBuildingForm }); setNewBuildingForm(EMPTY_BUILDING_FORM); }, 'Blok oluşturuldu.')} className="app-button px-4 py-3 text-xs uppercase tracking-[0.16em]">Blok ekle</button>
+            </div>
+            <div className="mt-5 grid gap-3 md:grid-cols-[1.1fr_0.7fr_0.9fr_auto]">
+              <select className="app-select px-4 py-4" value={newUnitForm.buildingId} onChange={(event) => setNewUnitForm((current) => ({ ...current, buildingId: event.target.value }))}>{siteBuildings.map((building) => <option key={building.id} value={building.id}>{building.name}</option>)}</select>
+              <input className="app-input px-4 py-4" value={newUnitForm.unitNumber} onChange={(event) => setNewUnitForm((current) => ({ ...current, unitNumber: event.target.value }))} placeholder="Daire no" type="text" />
+              <input className="app-input px-4 py-4" value={newUnitForm.floor} onChange={(event) => setNewUnitForm((current) => ({ ...current, floor: event.target.value }))} placeholder="Kat" type="number" />
+              <button type="button" onClick={() => void run(async () => { await createUnit({ buildingId: newUnitForm.buildingId, unitNumber: newUnitForm.unitNumber, floor: Number(newUnitForm.floor) }); setNewUnitForm((current) => ({ ...EMPTY_UNIT_FORM, buildingId: current.buildingId })); }, 'Daire oluşturuldu.')} className="app-button px-4 py-3 text-xs uppercase tracking-[0.16em]">Daire ekle</button>
+            </div>
+          </section>
+        </div>
+
+        <section className="app-card overflow-hidden p-0">
+          <div className="border-b-2 border-[var(--color-line)] px-5 py-4"><p className="app-kicker">Yerleşim listesi</p><h3 className="mt-2 font-heading text-2xl font-bold">Bloklar ve daireler</h3></div>
+          <div className="overflow-x-auto">
+            <table className="data-table">
+              <thead><tr><th>Blok</th><th>Daire</th><th>Kat</th><th>Sakin</th><th>İşlem</th></tr></thead>
+              <tbody>
+                {siteUnits.map((unit) => {
+                  const form = unitForms[unit.id] ?? EMPTY_UNIT_FORM;
+                  const building = siteBuildings.find((entry) => entry.id === unit.buildingId);
+                  const resident = residentRows.find((row) => row.unit.id === unit.id)?.resident ?? null;
+                  return (
+                    <tr key={unit.id}>
+                      <td>{building?.name ?? '-'}</td>
+                      <td><input className="app-input px-3 py-2" value={form.unitNumber} onChange={(event) => setUnitForms((current) => ({ ...current, [unit.id]: { ...form, unitNumber: event.target.value } }))} type="text" /></td>
+                      <td><input className="app-input px-3 py-2" value={form.floor} onChange={(event) => setUnitForms((current) => ({ ...current, [unit.id]: { ...form, floor: event.target.value } }))} type="number" /></td>
+                      <td>{resident?.fullName ?? 'Atanmadı'}</td>
+                      <td><div className="flex flex-wrap gap-2"><button type="button" className="app-button-secondary px-3 py-2 text-[11px] uppercase tracking-[0.16em]" onClick={() => void run(() => updateUnitDetails({ unitId: unit.id, unitNumber: form.unitNumber, floor: Number(form.floor) }), 'Daire güncellendi.')}>Kaydet</button><button type="button" className="app-button-secondary px-3 py-2 text-[11px] uppercase tracking-[0.16em]" onClick={() => void run(() => deleteUnit(unit.id), 'Daire silindi.', 'info')}>Sil</button></div></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="border-t-2 border-[var(--color-line)] px-5 py-4">
+            <div className="grid gap-3">
+              {siteBuildings.map((building) => {
+                const form = buildingForms[building.id] ?? EMPTY_BUILDING_FORM;
+                return (
+                  <div key={building.id} className="rounded-md border-2 border-[var(--color-line)] p-4">
+                    <div className="grid gap-3 lg:grid-cols-[1fr_1.2fr_1fr_1fr_auto]">
+                      <input className="app-input px-4 py-4" value={form.name} onChange={(event) => setBuildingForms((current) => ({ ...current, [building.id]: { ...form, name: event.target.value } }))} type="text" />
+                      <input className="app-input px-4 py-4" value={form.address} onChange={(event) => setBuildingForms((current) => ({ ...current, [building.id]: { ...form, address: event.target.value } }))} type="text" />
+                      <input className="app-input px-4 py-4" value={form.doorLabel} onChange={(event) => setBuildingForms((current) => ({ ...current, [building.id]: { ...form, doorLabel: event.target.value } }))} type="text" />
+                      <input className="app-input px-4 py-4" value={form.kioskCode} onChange={(event) => setBuildingForms((current) => ({ ...current, [building.id]: { ...form, kioskCode: event.target.value } }))} type="text" />
+                      <div className="flex flex-wrap gap-2"><button type="button" className="app-button px-3 py-2 text-[11px] uppercase tracking-[0.16em]" onClick={() => void run(() => updateBuildingDetails({ buildingId: building.id, ...form }), 'Blok güncellendi.')}>Kaydet</button><button type="button" className="app-button-secondary px-3 py-2 text-[11px] uppercase tracking-[0.16em]" onClick={() => void run(() => deleteBuilding(building.id), 'Blok silindi.', 'info')}>Sil</button></div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (activeTab === 'assignments' && isSuperAdmin) {
+    content = (
+      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+        <section className="app-card p-5">
+          <p className="app-kicker">Site yöneticisi</p>
+          <h3 className="mt-2 font-heading text-2xl font-bold">Sakinler arasından seç</h3>
+          <div className="mt-5 space-y-3">
+            <select className="app-select px-4 py-4" value={selectedManagerId} onChange={(event) => setSelectedManagerId(event.target.value)}>
+              <option value="">Yönetici atanmasın</option>
+              {siteResidents.map((profile) => <option key={profile.id} value={profile.id}>{profile.fullName} · {profile.unitId ? unitLabel(state, profile.unitId) : 'Daire yok'}</option>)}
+            </select>
+            <button type="button" onClick={() => void run(() => assignSiteManager({ siteId: activeSiteId, profileId: selectedManagerId || null }), selectedManagerId ? 'Site yöneticisi atandı.' : 'Yönetici kaldırıldı.')} className="app-button w-full px-5 py-4 text-sm uppercase tracking-[0.16em]">Kaydet</button>
+            <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4"><p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">Mevcut yönetici</p><p className="mt-3 font-semibold">{siteManager?.fullName ?? 'Atanmadı'}</p></div>
+          </div>
+        </section>
+
+        <section className="app-card p-5">
+          <p className="app-kicker">Danışmanlar</p>
+          <h3 className="mt-2 font-heading text-2xl font-bold">Site atamaları</h3>
+          <div className="mt-5 space-y-3">
+            {consultantProfiles.map((profile) => {
+              const assigned = state.consultantSiteAssignments.some((assignment) => assignment.siteId === activeSiteId && assignment.profileId === profile.id);
+              return (
+                <div key={profile.id} className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div><p className="font-semibold">{profile.fullName}</p><p className="mt-1 text-sm text-[var(--color-muted)]">{profile.phone}</p></div>
+                    <button type="button" onClick={() => void run(() => setConsultantAssignment({ siteId: activeSiteId, profileId: profile.id, assigned: !assigned }), assigned ? 'Danışman ataması kaldırıldı.' : 'Danışman atandı.', 'info')} className={assigned ? 'app-button-secondary px-4 py-3 text-xs uppercase tracking-[0.16em]' : 'app-button px-4 py-3 text-xs uppercase tracking-[0.16em]'}>{assigned ? 'Kaldır' : 'Ata'}</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (activeTab === 'calls') {
+    content = (
+      <div className="grid gap-6 xl:grid-cols-2">
+        <section className="app-card p-5">
+          <p className="app-kicker">Canlı görüşmeler</p>
+          <h3 className="mt-2 font-heading text-2xl font-bold">Açık kayıtlar</h3>
+          <div className="mt-5 space-y-3">
+            {callMatches.length ? callMatches.map(({ request, consultant }) => (
+              <div key={request.id} className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="font-semibold">{request.guestName}</p><p className="mt-1 text-sm text-[var(--color-muted)]">{unitLabel(state, request.unitId)} · {requestTypeLabel(request.type)}</p></div>
+                  <div className="text-right"><p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">Danışman</p><p className="mt-2 font-semibold text-[var(--color-accent)]">{consultant?.fullName ?? 'Havuz'}</p></div>
+                </div>
+                <p className="mt-3 text-xs text-[var(--color-muted)]">{formatDateTime(request.createdAt)}</p>
+              </div>
+            )) : <div className="rounded-md border-2 border-dashed border-[var(--color-line)] p-6 text-sm text-[var(--color-muted)]">Aktif görüşme görünmüyor.</div>}
+          </div>
+        </section>
+
+        <section className="app-card p-5">
+          <p className="app-kicker">Geçmiş</p>
+          <h3 className="mt-2 font-heading text-2xl font-bold">Önceki log kayıtları</h3>
+          <div className="mt-5 space-y-3">
+            {siteLogs.length ? siteLogs.map((log) => (
+              <div key={log.id} className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+                <p className="text-sm leading-6">{log.eventDetails}</p>
+                <p className="mt-3 text-xs text-[var(--color-muted)]">{formatDateTime(log.timestamp)}</p>
+              </div>
+            )) : <div className="rounded-md border-2 border-dashed border-[var(--color-line)] p-6 text-sm text-[var(--color-muted)]">Log kaydı bulunmuyor.</div>}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (activeTab === 'announcements') {
+    content = (
+      <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
+        <section className="app-card p-5">
+          <p className="app-kicker">Yeni duyuru</p>
+          <h3 className="mt-2 font-heading text-2xl font-bold">Siteye yayın yap</h3>
+          <div className="mt-5 space-y-3">
+            <input className="app-input px-4 py-4" value={announcementForm.title} onChange={(event) => setAnnouncementForm((current) => ({ ...current, title: event.target.value }))} placeholder="Başlık" type="text" />
+            <select className="app-select px-4 py-4" value={announcementForm.category} onChange={(event) => setAnnouncementForm((current) => ({ ...current, category: event.target.value as Announcement['category'] }))}><option value="Operasyon">Operasyon</option><option value="Güvenlik">Güvenlik</option><option value="Yönetim">Yönetim</option></select>
+            <textarea className="app-textarea min-h-[140px] px-4 py-4" value={announcementForm.summary} onChange={(event) => setAnnouncementForm((current) => ({ ...current, summary: event.target.value }))} placeholder="Metin" />
+            <button type="button" onClick={() => void run(async () => { await createAnnouncement({ siteId: activeSiteId, title: announcementForm.title, summary: announcementForm.summary, category: announcementForm.category }); setAnnouncementForm({ title: '', summary: '', category: 'Operasyon' }); }, 'Duyuru yayınlandı.')} className="app-button w-full px-5 py-4 text-sm uppercase tracking-[0.16em]">Yayınla</button>
+          </div>
+        </section>
+
+        <section className="app-card p-5">
+          <p className="app-kicker">Duyurular</p>
+          <h3 className="mt-2 font-heading text-2xl font-bold">Yayın listesi</h3>
+          <div className="mt-5 space-y-3">
+            {newestAnnouncements(siteAnnouncements).map((announcement) => (
+              <div key={announcement.id} className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="font-semibold">{announcement.title}</p><p className="mt-2 text-sm leading-6 text-[var(--color-muted)]">{announcement.summary}</p></div>
+                  <span className="text-xs font-semibold text-[var(--color-accent)]">{announcement.category}</span>
+                </div>
+                <p className="mt-3 text-xs text-[var(--color-muted)]">{formatDateTime(announcement.publishedAt)}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  if (activeTab === 'services') {
+    content = (
+      <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
+        <section className="app-card p-5">
+          <p className="app-kicker">Yeni hizmet</p>
+          <h3 className="mt-2 font-heading text-2xl font-bold">Siteye hizmet ekle</h3>
+          <div className="mt-5 space-y-3">
+            <input className="app-input px-4 py-4" value={serviceForm.fullName} onChange={(event) => setServiceForm((current) => ({ ...current, fullName: event.target.value }))} placeholder="Firma veya kişi adı" type="text" />
+            <select className="app-select px-4 py-4" value={serviceForm.category} onChange={(event) => setServiceForm((current) => ({ ...current, category: event.target.value as ProviderCategory }))}><option value="Temizlik">Temizlik</option><option value="Elektrik">Elektrik</option><option value="Tesisat">Tesisat</option><option value="Asansör">Asansör</option><option value="Nakliyat">Nakliyat</option><option value="Peyzaj">Peyzaj</option></select>
+            <input className="app-input px-4 py-4" value={serviceForm.phone} onChange={(event) => setServiceForm((current) => ({ ...current, phone: event.target.value }))} placeholder="Telefon" type="text" />
+            <textarea className="app-textarea min-h-[120px] px-4 py-4" value={serviceForm.note} onChange={(event) => setServiceForm((current) => ({ ...current, note: event.target.value }))} placeholder="Not" />
+            <button type="button" onClick={() => void run(async () => { await createServiceProvider({ siteId: activeSiteId, ...serviceForm }); setServiceForm(EMPTY_SERVICE_FORM); }, 'Hizmet kaydı eklendi.')} className="app-button w-full px-5 py-4 text-sm uppercase tracking-[0.16em]">Kaydı ekle</button>
+          </div>
+        </section>
+
+        <section className="app-card p-5">
+          <p className="app-kicker">Hizmet kayıtları</p>
+          <h3 className="mt-2 font-heading text-2xl font-bold">Düzenle veya sil</h3>
+          <div className="mt-5 space-y-3">
+            {siteServices.map((service) => {
+              const form = serviceEditForms[service.id] ?? EMPTY_SERVICE_FORM;
+              return (
+                <div key={service.id} className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <input className="app-input px-4 py-4" value={form.fullName} onChange={(event) => setServiceEditForms((current) => ({ ...current, [service.id]: { ...form, fullName: event.target.value } }))} type="text" />
+                    <select className="app-select px-4 py-4" value={form.category} onChange={(event) => setServiceEditForms((current) => ({ ...current, [service.id]: { ...form, category: event.target.value as ProviderCategory } }))}><option value="Temizlik">Temizlik</option><option value="Elektrik">Elektrik</option><option value="Tesisat">Tesisat</option><option value="Asansör">Asansör</option><option value="Nakliyat">Nakliyat</option><option value="Peyzaj">Peyzaj</option></select>
+                    <input className="app-input px-4 py-4" value={form.phone} onChange={(event) => setServiceEditForms((current) => ({ ...current, [service.id]: { ...form, phone: event.target.value } }))} type="text" />
+                    <textarea className="app-textarea min-h-[92px] px-4 py-4 lg:col-span-2" value={form.note} onChange={(event) => setServiceEditForms((current) => ({ ...current, [service.id]: { ...form, note: event.target.value } }))} />
+                  </div>
+                  <div className="mt-4 flex gap-3">
+                    <button type="button" onClick={() => void run(() => updateServiceProviderDetails({ providerId: service.id, ...form }), 'Hizmet güncellendi.')} className="app-button px-4 py-3 text-xs uppercase tracking-[0.16em]">Kaydet</button>
+                    <button type="button" onClick={() => void run(() => deleteServiceProvider(service.id), 'Hizmet silindi.', 'info')} className="app-button-secondary px-4 py-3 text-xs uppercase tracking-[0.16em]">Sil</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <main className="min-h-screen px-4 py-8">
+      <div className="app-shell grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className="app-panel h-fit px-5 py-6">
+          <BrandLogo size="md" />
+          <h1 className="mt-5 font-heading text-4xl font-bold">{roleTitle(user.role)}</h1>
+          <p className="mt-3 text-sm leading-6 text-[var(--color-muted)]">Siteleri seçin, akışı izleyin ve yönetim işlemlerini buradan yürütün.</p>
+          <div className="mt-6 rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">Siteler</p>
+            <div className="mt-4 space-y-3">
+              {visibleSites.map((site) => (
+                <button key={site.id} type="button" onClick={() => setSelectedSiteId(site.id)} data-active={activeSiteId === site.id} className="w-full rounded-md border-2 border-[var(--color-line)] px-3 py-3 text-left transition hover:-translate-y-0.5 data-[active=true]:border-[var(--color-accent)] data-[active=true]:bg-[var(--color-accent-soft)]">
+                  <p className="font-semibold">{site.name}</p>
+                  <p className="mt-1 text-sm text-[var(--color-muted)]">{site.district} · {site.city}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-6 space-y-3">
+            {menuItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button key={item.id} type="button" data-active={activeTab === item.id} onClick={() => setActiveTab(item.id)} className="sidebar-link">
+                  <Icon className="h-5 w-5 text-[var(--color-accent)]" />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+
+        <section className="space-y-6">
+          <header className="app-panel px-6 py-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="app-kicker">Aktif saha</p>
+                <h2 className="mt-3 font-heading text-4xl font-bold">{activeSite?.name ?? 'Site seçin'}</h2>
+                <p className="mt-3 max-w-3xl text-base leading-7 text-[var(--color-muted)]">{activeSite ? `${activeSite.address} · ${activeSite.district} / ${activeSite.city}` : 'Soldan bir site seçin.'}</p>
+              </div>
+              <div className="flex items-center gap-3 rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] px-4 py-3">
+                <BellRing className="h-5 w-5 text-[var(--color-accent)]" />
+                <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">Açık görüşme</p><p className="font-semibold">{openCalls.length}</p></div>
+              </div>
+            </div>
+          </header>
+          {content}
+        </section>
       </div>
     </main>
   );

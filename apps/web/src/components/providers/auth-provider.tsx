@@ -8,180 +8,207 @@ import {
   useState,
   type ReactNode
 } from 'react';
-import { appFetch } from '@/lib/api';
-import {
-  clearStoredAuthSession,
-  readStoredAuthSession,
-  writeStoredAuthSession
-} from '@/lib/auth-session';
-import type { AuthLoginResponse, AuthMeResponse, AuthSession } from '@/lib/types';
-import { useToast } from './toast-provider';
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js';
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import { buildPortalAuthSession } from '@/lib/supabase/portal';
+import { toSupabaseUserMessage, withSupabaseTimeout } from '@/lib/supabase/runtime';
+import type { PortalAuthSession, PortalRole } from '@/lib/portal-types';
 
 type AuthContextValue = {
-  session: AuthSession | null;
+  session: PortalAuthSession | null;
   loading: boolean;
-  login: (identifier: string, password: string, role: AuthSession['user']['role']) => Promise<AuthSession>;
-  logout: () => void;
+  login: (identifier: string, password: string, role: PortalRole) => Promise<PortalAuthSession>;
+  logout: () => Promise<void>;
   refreshSession: () => Promise<void>;
-  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-
-function PasswordUpdateOverlay({
-  onSubmit
-}: {
-  onSubmit: (currentPassword: string, newPassword: string) => Promise<void>;
-}) {
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4 backdrop-blur-md">
-      <div className="w-full max-w-lg rounded-[32px] border border-white/10 bg-[#0a0a0c] p-8 text-white shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)]">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-400/80">İlk Güvenlik Adımı</p>
-        <h2 className="mt-3 font-heading text-3xl font-bold tracking-tight text-white">Şifrenizi yenileyin</h2>
-        <p className="mt-3 text-sm leading-relaxed text-zinc-400">
-          Hesabınız için sistem tarafından oluşturulan geçici şifre aktif. Güvenli kullanım için şimdi yeni şifre belirleyin.
-        </p>
-
-        <div className="mt-8 space-y-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-zinc-300">Mevcut Şifre</label>
-            <input
-              type="password"
-              value={currentPassword}
-              onChange={(event) => setCurrentPassword(event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-white focus:border-amber-500/50 focus:outline-none"
-            />
-          </div>
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-zinc-300">Yeni Şifre</label>
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-              className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-white focus:border-amber-500/50 focus:outline-none"
-            />
-          </div>
-        </div>
-
-        {message ? <p className="mt-4 text-sm text-rose-400">{message}</p> : null}
-
-        <button
-          type="button"
-          disabled={submitting || currentPassword.length < 4 || newPassword.length < 8}
-          onClick={async () => {
-            setSubmitting(true);
-            setMessage(null);
-
-            try {
-              await onSubmit(currentPassword, newPassword);
-            } catch (error) {
-              setMessage(error instanceof Error ? error.message : 'Şifre güncellenemedi.');
-            } finally {
-              setSubmitting(false);
-            }
-          }}
-          className="mt-8 w-full rounded-2xl border border-amber-500/40 bg-amber-500 px-6 py-4 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {submitting ? 'Kaydediliyor...' : 'Şifreyi Güncelle'}
-        </button>
-      </div>
-    </div>
-  );
-}
+const AUTH_TIMEOUT_MESSAGE = 'Supabase şu anda yanıt vermiyor. Lütfen kısa süre sonra yeniden deneyin.';
+const PROFILE_TIMEOUT_MESSAGE = 'Oturum doğrulandı ancak hesap bilgileri alınamadı.';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const { showToast } = useToast();
-  const [session, setSession] = useState<AuthSession | null>(null);
+  const [session, setSession] = useState<PortalAuthSession | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const storedSession = readStoredAuthSession();
+    const client = getSupabaseBrowserClient();
 
-    if (!storedSession) {
+    if (!client) {
       setLoading(false);
       return;
     }
 
-    setSession(storedSession);
-    void refreshSession();
+    const supabase = client;
+    let active = true;
+
+    async function syncSession(nextSession: Session | null) {
+      if (!active) {
+        return;
+      }
+
+      if (!nextSession) {
+        setSession(null);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+
+      try {
+        const nextPortalSession = await withSupabaseTimeout(
+          buildPortalAuthSession(supabase, nextSession),
+          12000,
+          PROFILE_TIMEOUT_MESSAGE
+        );
+
+        if (!active) {
+          return;
+        }
+
+        setSession(nextPortalSession);
+      } catch {
+        await supabase.auth.signOut();
+
+        if (!active) {
+          return;
+        }
+
+        setSession(null);
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void withSupabaseTimeout(supabase.auth.getSession(), 12000, AUTH_TIMEOUT_MESSAGE)
+      .then(({ data }) => syncSession(data.session))
+      .catch(() => {
+        if (active) {
+          setSession(null);
+          setLoading(false);
+        }
+      });
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_: AuthChangeEvent, nextSession) => {
+      void syncSession(nextSession);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function refreshSession() {
-    const storedSession = readStoredAuthSession();
+    const client = getSupabaseBrowserClient();
 
-    if (!storedSession) {
+    if (!client) {
       setSession(null);
       setLoading(false);
       return;
     }
 
-    try {
-      const response = await appFetch<AuthMeResponse>('auth/me');
-      const nextSession = {
-        token: storedSession.token,
-        user: response.user
-      };
+    setLoading(true);
 
-      writeStoredAuthSession(nextSession);
+    try {
+      const {
+        data: { session: authSession }
+      } = await withSupabaseTimeout(client.auth.getSession(), 12000, AUTH_TIMEOUT_MESSAGE);
+
+      if (!authSession) {
+        setSession(null);
+        setLoading(false);
+        return;
+      }
+
+      const nextSession = await withSupabaseTimeout(
+        buildPortalAuthSession(client, authSession),
+        12000,
+        PROFILE_TIMEOUT_MESSAGE
+      );
+
       setSession(nextSession);
-    } catch {
-      clearStoredAuthSession();
-      setSession(null);
     } finally {
       setLoading(false);
     }
   }
 
-  async function login(identifier: string, password: string, role: AuthSession['user']['role']) {
-    const response = await appFetch<AuthLoginResponse>('auth/login', {
-      method: 'POST',
-      body: {
-        identifier,
-        password,
-        role
+  async function login(identifier: string, password: string, role: PortalRole) {
+    const client = getSupabaseBrowserClient();
+
+    if (!client) {
+      throw new Error('Supabase bağlantısı yapılandırılmadı.');
+    }
+
+    const normalizedEmail = identifier.trim().toLocaleLowerCase('tr-TR');
+    setLoading(true);
+    let authData: Awaited<ReturnType<typeof client.auth.signInWithPassword>>['data'] | null = null;
+    let authError: string | null = null;
+    try {
+      const { data, error } = await withSupabaseTimeout(
+        client.auth.signInWithPassword({
+          email: normalizedEmail,
+          password
+        }),
+        12000,
+        AUTH_TIMEOUT_MESSAGE
+      );
+
+      if (data.session) {
+        authData = data;
+      } else {
+        authError = toSupabaseUserMessage(
+          error ? new Error(error.message) : null,
+          'E-posta veya şifre bilgisini kontrol edip yeniden deneyin.'
+        );
       }
-    });
+    } catch (error) {
+      authError = toSupabaseUserMessage(error, 'E-posta veya şifre bilgisini kontrol edip yeniden deneyin.');
+    }
 
-    const nextSession = {
-      token: response.token,
-      user: response.user
-    };
+    if (!authData?.session) {
+      setLoading(false);
+      throw new Error(authError ?? 'E-posta veya şifre bilgisini kontrol edip yeniden deneyin.');
+    }
 
-    writeStoredAuthSession(nextSession);
+    let nextSession: PortalAuthSession;
+
+    try {
+      nextSession = await withSupabaseTimeout(
+        buildPortalAuthSession(client, authData.session),
+        12000,
+        PROFILE_TIMEOUT_MESSAGE
+      );
+    } catch (error) {
+      await client.auth.signOut();
+      setLoading(false);
+      throw new Error(toSupabaseUserMessage(error, PROFILE_TIMEOUT_MESSAGE));
+    }
+
+    if (nextSession.user.role !== role) {
+      await client.auth.signOut();
+      setLoading(false);
+      throw new Error('Seçtiğiniz panel için bu hesapla giriş yapılamıyor.');
+    }
+
     setSession(nextSession);
+    setLoading(false);
     return nextSession;
   }
 
-  function logout() {
-    clearStoredAuthSession();
+  async function logout() {
+    const client = getSupabaseBrowserClient();
+
+    if (!client) {
+      setSession(null);
+      return;
+    }
+
+    await client.auth.signOut();
     setSession(null);
-  }
-
-  async function changePassword(currentPassword: string, newPassword: string) {
-    const response = await appFetch<AuthLoginResponse>('auth/change-password', {
-      method: 'POST',
-      body: {
-        currentPassword,
-        newPassword
-      }
-    });
-
-    const nextSession = {
-      token: response.token,
-      user: response.user
-    };
-
-    writeStoredAuthSession(nextSession);
-    setSession(nextSession);
-    showToast({
-      tone: 'success',
-      message: 'Şifreniz güncellendi.'
-    });
   }
 
   const value = useMemo<AuthContextValue>(
@@ -190,18 +217,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       login,
       logout,
-      refreshSession,
-      changePassword
+      refreshSession
     }),
     [session, loading]
   );
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-      {session?.user.mustChangePassword ? <PasswordUpdateOverlay onSubmit={changePassword} /> : null}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

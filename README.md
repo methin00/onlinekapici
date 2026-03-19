@@ -1,67 +1,31 @@
 # Online Kapıcı
 
-Kurumsal görünümlü, çok kiracılı bir bina giriş yönetimi MVP iskeleti.
+Online Kapıcı, Supabase tabanlı giriş kontrolü ve site yönetim uygulamasıdır.
 
-## Seçilen Mimari
+## Mimari
 
-- `apps/web`: Next.js App Router tabanlı arayüz
-- `apps/api`: Express + Socket.io tabanlı backend
-- `apps/api/prisma/schema.prisma`: PostgreSQL için çok kiracılı veri modeli
-- Yetkilendirme: `x-api-key` veya JWT
-- Tenant izolasyonu: her API isteği `buildingId` bağlamıyla sınırlandırılır
+- `apps/web`: Next.js App Router arayüzü
+- `supabase/schema.sql`: veritabanı şeması, RLS kuralları ve tetikleyiciler
+- `apps/web/scripts/seed-supabase.ts`: örnek kullanıcılar ve örnek veri kurulumu
+- Kimlik doğrulama, veritabanı, gerçek zamanlı güncellemeler ve işlem kayıtları doğrudan Supabase üzerinden çalışır
 
 ## Ekranlar
 
-- `/`: ürün vitrini ve rol bazlı girişler
-- `/tablet`: girişteki tablet deneyimi
-- `/resident`: sakin mobil arayüzü
-- `/dashboard`: admin ve danışman paneli
-
-## API Uçları
-
-- `GET /health`
-- `GET /api/residents/search?query=5`
-- `GET /api/guest-calls`
-- `POST /api/guest-calls`
-- `POST /api/guest-calls/:callId/decision`
-- `GET /api/admin/overview`
-- `GET /api/admin/fallback-calls`
-
-Korunan API örnek header'ları:
-
-```http
-x-api-key: dev-online-kapici-key
-x-building-id: bldg-001
-x-user-role: concierge
-```
+- `/`: ürün vitrini ve yönlendirme
+- `/auth`: rol bazlı giriş ekranı
+- `/tablet`: giriş terminali
+- `/resident`: sakin uygulaması
+- `/dashboard`: yönetim ve operasyon ekranı
 
 ## Kurulum
 
-1. Kök dizinde `.env.example` dosyasını `.env` olarak kopyalayın.
-2. Gerekirse `apps/api/.env.example` içeriğini de API ortam değişkenleri için kullanın.
-3. Geliştirme modunu çalıştırın:
+1. `.env.example` dosyasını temel alarak Supabase bilgilerinizi girin.
+2. [supabase/schema.sql](./supabase/schema.sql) dosyasını Supabase SQL Editor içinde çalıştırın.
+3. Örnek hesapları yüklemek için `npm run seed:supabase -w apps/web` komutunu çalıştırın.
+4. Uygulamayı başlatmak için `npm run dev` komutunu kullanın.
 
-```bash
-npm run dev
-```
+## Notlar
 
-Tek tek başlatmak için:
-
-```bash
-npm run dev -w apps/api
-npm run dev -w apps/web
-```
-
-## MVP Notları
-
-- Bildirim servisi şu an simüle edilir; Twilio WhatsApp Business API entegrasyonu için servis katmanı hazırlandı.
-- Kapı açma çağrısı `ESP32_GATEWAY_URL` adresine HTTP ile gönderilir, başarısız olursa simüle moduna düşer.
-- Prisma şeması PostgreSQL hedefiyle hazırdır; demo akış için in-memory store kullanılır.
-- Gerçek zamanlı olaylar Socket.io oda mantığı ile bina bazında yayınlanır.
-
-## Sonraki Adımlar
-
-- Prisma migration ve seed akışını eklemek
-- Twilio ve MQTT adaptörlerini canlı entegrasyona geçirmek
-- QR doğrulama ve push notification uçlarını tamamlamak
-- Web istemcisini API ve Socket.io ile canlı bağlamak
+- Kapı açma işlemleri ilk fazda simülasyon olarak `gate_events` tablosuna kaydedilir.
+- Kiosk, sakin ve yönetim ekranları aynı Supabase veri akışını paylaşır.
+- Demo giriş bilgileri giriş ekranında otomatik doldurulur.

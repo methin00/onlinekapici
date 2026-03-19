@@ -1,47 +1,74 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
+import { ShieldCheck, Building2, Smartphone, MonitorSmartphone, Headset } from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Building2, ShieldCheck, Smartphone, KeyRound, MonitorSmartphone } from 'lucide-react';
 import { roleHomePath } from '@/lib/auth-session';
-import type { UserRole } from '@/lib/types';
+import { demoCredentialMap } from '@/lib/portal-seed';
+import type { PortalRole } from '@/lib/portal-types';
 import { useAuth } from '../providers/auth-provider';
 import { useToast } from '../providers/toast-provider';
+import { BrandLogo } from '../ui/brand-logo';
 
 const roleOptions: Array<{
-  role: UserRole;
+  role: PortalRole;
   label: string;
   description: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
 }> = [
   {
     role: 'super_admin',
-    label: 'Sistem Yöneticisi',
-    description: 'Siteleri, kullanıcıları ve tüm akışı yönetin.',
-    icon: <ShieldCheck className="h-5 w-5 text-amber-400" />
+    label: 'Merkez Yönetim',
+    description: 'Tüm siteleri, canlı çağrıları ve operasyon akışını tek yerden yönetin.',
+    icon: <ShieldCheck className="h-5 w-5 text-[var(--color-accent)]" />
   },
   {
-    role: 'concierge',
-    label: 'Danışman',
-    description: 'Canlı çağrıları yönetin ve kapı akışını izleyin.',
-    icon: <Building2 className="h-5 w-5 text-cyan-400" />
+    role: 'consultant',
+    label: 'Danışma',
+    description: 'Düşen çağrıları devralın, kapıları uzaktan açın ve akışı takip edin.',
+    icon: <Headset className="h-5 w-5 text-[var(--color-accent)]" />
+  },
+  {
+    role: 'manager',
+    label: 'Site Yönetimi',
+      description: 'Sakin paneli deneyimiyle daireleri görün, duyuru paylaşın ve saha kayıtlarını izleyin.',
+    icon: <Building2 className="h-5 w-5 text-[var(--color-accent)]" />
   },
   {
     role: 'resident',
     label: 'Sakin',
-    description: 'Kapı kararlarını verin ve erişimlerinizi yönetin.',
-    icon: <Smartphone className="h-5 w-5 text-emerald-400" />
+    description: 'Ziyaret onayı verin, duyuruları izleyin ve hizmet rehberine ulaşın.',
+    icon: <Smartphone className="h-5 w-5 text-[var(--color-accent)]" />
   },
   {
-    role: 'tablet',
-    label: 'Apartman Tableti',
-    description: 'Apartman kimliği ile giriş yapıp ziyaretçi ekranını açın.',
-    icon: <MonitorSmartphone className="h-5 w-5 text-fuchsia-400" />
+    role: 'kiosk_device',
+    label: 'Giriş Terminali',
+    description: 'Misafir, kurye ve sakin geçişlerini tek ekrandan başlatın.',
+    icon: <MonitorSmartphone className="h-5 w-5 text-[var(--color-accent)]" />
   }
 ];
 
-function isRequestedRole(value: string | null): value is UserRole {
-  return value === 'super_admin' || value === 'concierge' || value === 'resident' || value === 'tablet';
+function isRole(value: string | null): value is PortalRole {
+  return (
+    value === 'super_admin' ||
+    value === 'consultant' ||
+    value === 'manager' ||
+    value === 'resident' ||
+    value === 'kiosk_device'
+  );
+}
+
+function normalizeRequestedRole(value: string | null) {
+  if (value === 'tablet') {
+    return 'kiosk_device';
+  }
+
+  return isRole(value) ? value : 'resident';
+}
+
+function getDemoCredentials(role: PortalRole) {
+  return demoCredentialMap[role];
 }
 
 export function AuthConsole() {
@@ -49,20 +76,22 @@ export function AuthConsole() {
   const { showToast } = useToast();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const requestedRole = searchParams.get('role');
+  const requestedRole = normalizeRequestedRole(searchParams.get('role'));
   const redirectTarget = searchParams.get('redirect');
 
-  const [selectedRole, setSelectedRole] = useState<UserRole>(() => {
-    if (isRequestedRole(requestedRole)) {
-      return requestedRole;
-    }
-
-    return 'super_admin';
-  });
-  const [identifier, setIdentifier] = useState('');
-  const [password, setPassword] = useState('');
+  const [selectedRole, setSelectedRole] = useState<PortalRole>(requestedRole);
+  const [identifier, setIdentifier] = useState<string>(getDemoCredentials(requestedRole).email);
+  const [password, setPassword] = useState<string>(getDemoCredentials(requestedRole).password);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const credentials = getDemoCredentials(requestedRole);
+    setSelectedRole(requestedRole);
+    setIdentifier(credentials.email);
+    setPassword(credentials.password);
+    setMessage(null);
+  }, [requestedRole]);
 
   useEffect(() => {
     if (loading || !session) {
@@ -72,141 +101,115 @@ export function AuthConsole() {
     router.replace(redirectTarget || roleHomePath(session.user.role));
   }, [loading, redirectTarget, router, session]);
 
-  const selectedRoleMeta = useMemo(
+  const selectedMeta = useMemo(
     () => roleOptions.find((item) => item.role === selectedRole) ?? roleOptions[0],
     [selectedRole]
   );
 
-  const inputMeta =
-    selectedRole === 'tablet'
-      ? {
-          label: 'Apartman Kimliği',
-          placeholder: 'İl, ilçe, site, blok ve apartman kodu',
-          helper: 'Tablet girişi için apartman kimliğini eksiksiz girin.',
-          minLength: 13
-        }
-      : {
-          label: 'Giriş Numarası',
-          placeholder: '5xxxxxxxxx',
-          helper: 'Telefon numarasını 10 haneli biçimde yazın.',
-          minLength: 10
-        };
-
-  const isIdentifierValid =
-    selectedRole === 'tablet' ? identifier.replace(/[^\d]/g, '').length >= inputMeta.minLength : identifier.length === 10;
-
   return (
-    <main className="min-h-screen bg-[var(--bg-deep)] px-4 py-10 text-white selection:bg-amber-500/20 md:px-8 md:py-16">
-      <div className="mx-auto grid max-w-[1280px] gap-8 lg:grid-cols-[0.95fr_1.05fr]">
-        <section className="relative overflow-hidden rounded-[40px] border border-white/10 bg-[#0a0a0c] p-8 shadow-[0_40px_120px_-30px_rgba(0,0,0,0.9)] md:p-12">
-          <div className="absolute inset-0 bg-transparent" />
-          <div className="relative z-10">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-400/80">Güvenli Erişim</p>
-            <h1 className="mt-4 font-heading text-5xl font-bold tracking-tight text-white">
-              Tek girişle
-              <br />
-              doğru panele geçin
-            </h1>
-            <p className="mt-5 max-w-xl text-sm leading-relaxed text-zinc-400">
-              Yönetim, danışman, sakin ve apartman tableti aynı güvenli oturum altyapısı üzerinden çalışır.
-            </p>
+    <main className="app-shell min-h-screen px-4 py-8 md:py-12">
+      <div className="grid gap-8 xl:grid-cols-[1.05fr_0.95fr]">
+        <motion.section
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="app-panel overflow-hidden px-6 py-8 md:px-10 md:py-10"
+        >
+          <BrandLogo size="lg" showTagline />
+          <h1 className="mt-6 max-w-3xl font-heading text-4xl font-bold tracking-tight md:text-6xl">
+            Aynı sistem içinde
+            <br />
+            doğru ekrana geçin
+          </h1>
+          <p className="mt-5 max-w-2xl text-base leading-7 text-[var(--color-muted)]">
+            Giriş terminali, sakin ekranı, site yönetimi ve merkez operasyonu aynı veri akışıyla birlikte çalışır.
+          </p>
 
-            <div className="mt-10 grid gap-4">
-              {roleOptions.map((item) => {
-                const active = item.role === selectedRole;
-
-                return (
-                  <button
-                    key={item.role}
-                    type="button"
-                    onClick={() => {
-                      setSelectedRole(item.role);
-                      setIdentifier('');
-                      setPassword('');
-                      setMessage(null);
-                    }}
-                    className={`rounded-[28px] border px-5 py-5 text-left transition-all ${
-                      active
-                        ? 'border-amber-500/40 bg-amber-500/10 shadow-[0_0_30px_rgba(245,158,11,0.12)]'
-                        : 'border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/10'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="rounded-2xl border border-white/10 bg-black/30 p-3">{item.icon}</div>
-                      <div>
-                        <p className="font-heading text-2xl font-semibold tracking-tight text-white">{item.label}</p>
-                        <p className="mt-1 text-sm text-zinc-400">{item.description}</p>
-                      </div>
+          <div className="mt-10 grid gap-4">
+            {roleOptions.map((item, index) => {
+              const active = item.role === selectedRole;
+              return (
+                <motion.button
+                  key={item.role}
+                  initial={{ opacity: 0, x: -16 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: index * 0.05 }}
+                  type="button"
+                  onClick={() => {
+                    const credentials = getDemoCredentials(item.role);
+                    setSelectedRole(item.role);
+                    setIdentifier(credentials.email);
+                    setPassword(credentials.password);
+                    setMessage(null);
+                  }}
+                  className={`rounded-md border-2 px-5 py-5 text-left transition-all ${
+                    active
+                      ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]'
+                      : 'border-[var(--color-line)] bg-[var(--color-panel-strong)] hover:border-[var(--color-line-strong)]'
+                  }`}
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-md border-2 border-[var(--color-line)] bg-[#151517]">
+                      {item.icon}
                     </div>
-                  </button>
-                );
-              })}
-            </div>
+                    <div>
+                      <p className="font-heading text-2xl font-bold">{item.label}</p>
+                      <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-muted)]">{item.description}</p>
+                    </div>
+                  </div>
+                </motion.button>
+              );
+            })}
           </div>
-        </section>
+        </motion.section>
 
-        <section className="rounded-[40px] border border-white/10 bg-black/40 p-8 shadow-[0_40px_120px_-30px_rgba(0,0,0,0.8)] backdrop-blur md:p-12">
-          <div className="flex items-center gap-3">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-              <KeyRound className="h-5 w-5 text-white" />
-            </div>
+        <motion.section
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.08 }}
+          className="app-panel h-fit px-6 py-8 md:px-8"
+        >
+          <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-zinc-500">Oturum Aç</p>
-              <h2 className="font-heading text-3xl font-bold tracking-tight text-white">{selectedRoleMeta.label}</h2>
+              <p className="app-kicker">Giriş</p>
+              <h2 className="mt-3 font-heading text-3xl font-bold">{selectedMeta.label}</h2>
+              <p className="mt-3 text-sm leading-6 text-[var(--color-muted)]">{selectedMeta.description}</p>
+            </div>
+            <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] px-3 py-2 text-xs font-semibold text-[var(--color-accent)]">
+              Güvenli oturum
             </div>
           </div>
 
-          <div className="mt-10 space-y-5">
+          <div className="mt-8 space-y-5">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-zinc-300">{inputMeta.label}</label>
+              <label className="text-sm font-semibold text-[var(--color-muted)]">E-posta adresi</label>
               <input
-                type="text"
-                inputMode="numeric"
-                autoComplete="username"
+                className="app-input px-4 py-4"
                 value={identifier}
-                onChange={(event) =>
-                  setIdentifier(
-                    selectedRole === 'tablet'
-                      ? event.target.value.replace(/[^\d]/g, '').slice(0, 13)
-                      : event.target.value.replace(/[^\d]/g, '').slice(0, 10)
-                  )
-                }
-                placeholder={inputMeta.placeholder}
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-white placeholder:text-zinc-600 focus:border-amber-500/40 focus:outline-none"
+                onChange={(event) => setIdentifier(event.target.value)}
+                placeholder="ornek@onlinekapici.app"
+                type="email"
+                autoComplete="email"
               />
-              <p className="text-xs text-zinc-500">{inputMeta.helper}</p>
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-zinc-300">Şifre</label>
+              <label className="text-sm font-semibold text-[var(--color-muted)]">Şifre</label>
               <input
-                type="password"
-                autoComplete="current-password"
+                className="app-input px-4 py-4"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 placeholder="Şifrenizi girin"
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-white placeholder:text-zinc-600 focus:border-amber-500/40 focus:outline-none"
+                type="password"
+                autoComplete="current-password"
               />
             </div>
           </div>
 
-          {selectedRole === 'resident' ? (
-            <p className="mt-4 text-sm leading-relaxed text-zinc-400">
-              Sakin giriş numarası daireniz sisteme işlendiğinde otomatik oluşturulur.
-            </p>
-          ) : null}
-
-          {selectedRole === 'tablet' ? (
-            <p className="mt-4 text-sm leading-relaxed text-zinc-400">
-              Apartman kimliği ve ilk şifre yönetim panelinden görüntülenebilir.
-            </p>
-          ) : null}
-
-          {message ? <p className="mt-4 text-sm text-rose-400">{message}</p> : null}
+          {message ? <p className="mt-4 text-sm font-medium text-[var(--color-danger)]">{message}</p> : null}
 
           <button
             type="button"
-            disabled={submitting || !isIdentifierValid || password.length < 4}
+            disabled={submitting || identifier.trim().length < 3 || password.trim().length < 4}
             onClick={async () => {
               setSubmitting(true);
               setMessage(null);
@@ -215,30 +218,33 @@ export function AuthConsole() {
                 const nextSession = await login(identifier, password, selectedRole);
                 showToast({
                   tone: 'success',
-                  message: 'Giriş başarılı.'
+                  message: 'Giriş tamamlandı.'
                 });
-
-                if (nextSession.user.role !== selectedRole) {
-                  setSelectedRole(nextSession.user.role);
-                }
-
                 router.replace(redirectTarget || roleHomePath(nextSession.user.role));
               } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : 'Oturum açılamadı.';
-                setMessage(errorMessage);
+                const nextMessage = error instanceof Error ? error.message : 'Giriş sırasında bir sorun oluştu.';
+                setMessage(nextMessage);
                 showToast({
                   tone: 'danger',
-                  message: errorMessage
+                  message: nextMessage
                 });
               } finally {
                 setSubmitting(false);
               }
             }}
-            className="mt-8 w-full rounded-2xl border border-amber-500/40 bg-amber-500 px-6 py-4 text-sm font-semibold text-black disabled:cursor-not-allowed disabled:opacity-50"
+            className="app-button mt-8 w-full px-6 py-4 text-sm uppercase tracking-[0.14em] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {submitting ? 'Kontrol ediliyor...' : 'Giriş Yap'}
+            {submitting ? 'Giriş yapılıyor' : 'Panele geç'}
           </button>
-        </section>
+
+          <div className="mt-8 rounded-md border-2 border-dashed border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-accent)]">Bilgilendirme</p>
+            <p className="mt-3 text-sm leading-6 text-[var(--color-muted)]">
+              Giriş doğrudan Supabase oturumu ile açılır. Rolü değiştirdiğinizde örnek e-posta ve parola bilgileri
+              otomatik güncellenir.
+            </p>
+          </div>
+        </motion.section>
       </div>
     </main>
   );

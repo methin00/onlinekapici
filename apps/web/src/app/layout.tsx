@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter, Space_Grotesk } from 'next/font/google';
 import { AuthProvider } from '@/components/providers/auth-provider';
 import { PanelThemeProvider } from '@/components/providers/panel-theme-provider';
+import { PortalDataProvider } from '@/components/providers/portal-data-provider';
 import { ToastProvider } from '@/components/providers/toast-provider';
 import './globals.css';
 
@@ -19,16 +20,18 @@ const headingFont = Space_Grotesk({
 
 export const metadata: Metadata = {
   title: 'Online Kapıcı',
-  description: 'Apartman ve site giriş süreçleri için profesyonel ziyaretçi, sakin ve danışman deneyimi.'
+  description: 'Kiosk, sakin ve yönetim panellerini aynı canlı akışta toplayan dijital site yönetim sistemi.'
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="tr">
-      <body className={`${bodyFont.variable} ${headingFont.variable}`} data-panel-theme="soft">
+      <body className={`${bodyFont.variable} ${headingFont.variable}`} data-panel-theme="command">
         <PanelThemeProvider>
           <ToastProvider>
-            <AuthProvider>{children}</AuthProvider>
+            <AuthProvider>
+              <PortalDataProvider>{children}</PortalDataProvider>
+            </AuthProvider>
           </ToastProvider>
         </PanelThemeProvider>
       </body>

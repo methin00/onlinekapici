@@ -9,6 +9,3 @@ coverage
 *.log
 *.tsbuildinfo
 backups/
-apps/api/prisma_validate.txt
-apps/api/prisma/dev.db
-apps/api/prisma/dev.db-journal

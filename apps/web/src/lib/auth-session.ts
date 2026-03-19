@@ -1,50 +1,19 @@
-import type { AuthSession, UserRole } from './types';
+import type { PortalRole } from './portal-types';
 
-const AUTH_STORAGE_KEY = 'online-kapici-auth-session';
+type RoleLike = PortalRole | 'tablet' | 'building_admin' | 'concierge';
 
-export function readStoredAuthSession() {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  try {
-    const rawValue = window.localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!rawValue) {
-      return null;
-    }
-
-    return JSON.parse(rawValue) as AuthSession;
-  } catch {
-    return null;
-  }
-}
-
-export function writeStoredAuthSession(session: AuthSession) {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session));
-}
-
-export function clearStoredAuthSession() {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  window.localStorage.removeItem(AUTH_STORAGE_KEY);
-}
-
-export function roleHomePath(role: UserRole) {
+export function roleHomePath(role: RoleLike) {
   switch (role) {
     case 'super_admin':
+    case 'consultant':
+    case 'building_admin':
     case 'concierge':
       return '/dashboard';
-    case 'tablet':
-      return '/tablet';
+    case 'manager':
     case 'resident':
       return '/resident';
-    case 'building_admin':
-      return '/dashboard';
+    case 'kiosk_device':
+    case 'tablet':
+      return '/tablet';
   }
 }

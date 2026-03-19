@@ -3,7 +3,7 @@ import { TabletConsole } from '@/components/features/tablet-console';
 
 export default function TabletPage() {
   return (
-    <ProtectedScreen allowedRoles={['tablet']}>
+    <ProtectedScreen allowedRoles={['kiosk_device']}>
       <TabletConsole />
     </ProtectedScreen>
   );
