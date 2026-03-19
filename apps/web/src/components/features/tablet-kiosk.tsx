@@ -2,12 +2,12 @@
 
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  AlignHorizontalSpaceAround,
   ArrowLeft,
   Building2,
   Fingerprint,
   KeyRound,
   PhoneCall,
-  QrCode,
   Search,
   ShieldCheck,
   Sparkles,
@@ -22,7 +22,6 @@ import { useToast } from '../providers/toast-provider';
 import { BrandLogo } from '../ui/brand-logo';
 import {
   buildUnitResidentRows,
-  formatDateTime,
   getVisibleBuildings,
   getVisibleUnits,
   requestStatusLabel,
@@ -38,31 +37,26 @@ const MODE_OPTIONS = [
   {
     id: 'courier',
     title: 'Kargo / Kurye',
-    description: 'Teslimatın hangi firmadan geldiğini sorun ve kaydı oluşturun.',
     icon: Truck
   },
   {
     id: 'service',
     title: 'Hizmet',
-    description: 'Gelen ekibin hangi hizmet için geldiğini seçin.',
     icon: Wrench
   },
   {
     id: 'guest',
     title: 'Misafir',
-    description: 'QR daveti varsa okutun, yoksa ev sahibine bildirim gönderin.',
     icon: UserRound
   },
   {
     id: 'resident',
     title: 'Ev sahibi',
-    description: 'Daire şifresi veya yüz doğrulama ile giriş verin.',
     icon: ShieldCheck
   }
 ] as const satisfies ReadonlyArray<{
   id: KioskMode;
   title: string;
-  description: string;
   icon: typeof UserRound;
 }>;
 
@@ -95,11 +89,11 @@ export function TabletKiosk() {
   const [serviceLabel, setServiceLabel] = useState('');
   const [courierSource, setCourierSource] = useState('Trendyol Express');
   const [customCourierSource, setCustomCourierSource] = useState('');
-  const [selectedPassId, setSelectedPassId] = useState<string | null>(null);
   const [createdRequestId, setCreatedRequestId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [successState, setSuccessState] = useState<{ title: string; body: string } | null>(null);
   const handledRequestIdsRef = useRef<Set<string>>(new Set());
+  const screenHistoryRef = useRef<KioskScreen[]>([]);
 
   const user = session?.user;
   if (!user) {
@@ -121,7 +115,11 @@ export function TabletKiosk() {
   const selectedQrPasses = useMemo(
     () =>
       state.accessPasses.filter(
-        (pass) => pass.unitId === selectedUnitId && pass.status === 'active' && pass.type === 'qr'
+        (pass) =>
+          pass.unitId === selectedUnitId &&
+          pass.type === 'qr' &&
+          pass.status === 'active' &&
+          new Date(pass.expiresAt).getTime() > Date.now()
       ),
     [selectedUnitId, state.accessPasses]
   );
@@ -129,22 +127,9 @@ export function TabletKiosk() {
     ? (state.residentPreferences.find((item) => item.profileId === selectedResidentRow.resident?.id)
         ?.awayModeEnabled ?? false)
     : false;
-  const buildingRequests = state.guestRequests
-    .filter((request) => request.buildingId === selectedBuilding?.id)
-    .slice(0, 4);
   const liveRequest = createdRequestId
     ? state.guestRequests.find((request) => request.id === createdRequestId) ?? null
     : null;
-
-  useEffect(() => {
-    if (selectedQrPasses.length && !selectedPassId) {
-      setSelectedPassId(selectedQrPasses[0]?.id ?? null);
-    }
-
-    if (!selectedQrPasses.length) {
-      setSelectedPassId(null);
-    }
-  }, [selectedPassId, selectedQrPasses]);
 
   useEffect(() => {
     if (!liveRequest || liveRequest.status === 'pending' || handledRequestIdsRef.current.has(liveRequest.id)) {
@@ -164,7 +149,7 @@ export function TabletKiosk() {
           title: 'Kapı açılıyor',
           body: 'Ev sahibi girişe onay verdi. İyi ziyaretler.'
         });
-        setScreen('success');
+        goToScreen('success');
       });
       return;
     }
@@ -174,7 +159,7 @@ export function TabletKiosk() {
         title: 'Danışma sizi bekliyor',
         body: 'Ev sahibi yönlendirmeyi danışmaya aktardı.'
       });
-      setScreen('success');
+      goToScreen('success');
       return;
     }
 
@@ -182,10 +167,11 @@ export function TabletKiosk() {
       title: 'Giriş kapatıldı',
       body: 'Ev sahibi bu çağrıyı onaylamadı.'
     });
-    setScreen('success');
+    goToScreen('success');
   }, [liveRequest, selectedBuilding, selectedResidentRow?.resident?.fullName, triggerGate]);
 
   function resetFlow(nextScreen: KioskScreen = 'welcome') {
+    screenHistoryRef.current = [];
     setScreen(nextScreen);
     setSearchValue('');
     setSelectedUnitId(null);
@@ -198,14 +184,33 @@ export function TabletKiosk() {
     setServiceLabel('');
     setCourierSource('Trendyol Express');
     setCustomCourierSource('');
-    setSelectedPassId(null);
     setCreatedRequestId(null);
     setSuccessState(null);
     setSubmitting(false);
   }
 
+  function goToScreen(nextScreen: KioskScreen) {
+    if (screen !== nextScreen) {
+      screenHistoryRef.current.push(screen);
+    }
+
+    setScreen(nextScreen);
+  }
+
+  function goBack() {
+    const previousScreen = screenHistoryRef.current.pop();
+
+    if (!previousScreen) {
+      resetFlow('welcome');
+      return;
+    }
+
+    setScreen(previousScreen);
+  }
+
   function startMode(nextMode: KioskMode) {
     resetFlow('mode');
+    screenHistoryRef.current = ['welcome'];
     setMode(nextMode);
   }
 
@@ -246,7 +251,7 @@ export function TabletKiosk() {
             ? 'Daire şifresi doğrulandı. İyi girişler.'
             : 'Yüz doğrulama tamamlandı. Hoş geldiniz.'
       });
-      setScreen('success');
+      goToScreen('success');
     } finally {
       setSubmitting(false);
     }
@@ -272,7 +277,7 @@ export function TabletKiosk() {
           ? 'Daire sakini güvenliğe bırakılmasını istiyor.'
           : 'Teslimat bilgisi daire sakinine iletildi.'
       });
-      setScreen('success');
+      goToScreen('success');
     } finally {
       setSubmitting(false);
     }
@@ -295,7 +300,7 @@ export function TabletKiosk() {
         actorProfileId: currentUser.id
       });
       setCreatedRequestId(guestRequest.id);
-      setScreen('wait');
+      goToScreen('wait');
       showToast({ tone: 'info', message: 'Ev sahibine hizmet bildirimi gönderildi.' });
     } finally {
       setSubmitting(false);
@@ -309,15 +314,22 @@ export function TabletKiosk() {
     }
 
     if (guestAccessMode === 'qr') {
-      const activePass = selectedQrPasses.find((pass) => pass.id === selectedPassId) ?? selectedQrPasses[0];
+      const normalizedCode = oneTimePassword.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
 
-      if (!activePass) {
+      if (!selectedQrPasses.length) {
         showToast({ tone: 'warning', message: 'Bu daire için aktif QR daveti görünmüyor.' });
         return;
       }
 
-      if (oneTimePassword.trim().length < 4) {
-        showToast({ tone: 'warning', message: 'Tek kullanımlık şifreyi girin.' });
+      if (normalizedCode.length !== 6) {
+        showToast({ tone: 'warning', message: '6 karakterli erişim şifresini girin.' });
+        return;
+      }
+
+      const activePass = selectedQrPasses.find((pass) => pass.accessCode === normalizedCode);
+
+      if (!activePass) {
+        showToast({ tone: 'warning', message: 'QR şifresi doğrulanamadı.' });
         return;
       }
 
@@ -329,7 +341,7 @@ export function TabletKiosk() {
           title: 'Kapı açılıyor',
           body: 'QR daveti doğrulandı. İyi ziyaretler.'
         });
-        setScreen('success');
+        goToScreen('success');
       } finally {
         setSubmitting(false);
       }
@@ -348,7 +360,7 @@ export function TabletKiosk() {
         actorProfileId: currentUser.id
       });
       setCreatedRequestId(guestRequest.id);
-      setScreen('wait');
+      goToScreen('wait');
       showToast({ tone: 'info', message: 'Ev sahibine bildirim gönderildi.' });
     } finally {
       setSubmitting(false);
@@ -419,7 +431,6 @@ export function TabletKiosk() {
                 <Icon className="h-6 w-6 text-[var(--color-accent)]" />
               </div>
               <h2 className="mt-6 font-heading text-3xl font-bold">{item.title}</h2>
-              <p className="mt-3 max-w-[22rem] text-base leading-7 text-white/64">{item.description}</p>
             </motion.button>
           );
         })}
@@ -434,11 +445,7 @@ export function TabletKiosk() {
         <section className="rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,#17191d_0%,#121418_100%)] p-5 shadow-[0_18px_36px_rgba(0,0,0,0.22)]">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--color-accent)]">
-                Adım 2
-              </p>
-              <h2 className="mt-2 font-heading text-3xl font-bold">{currentMode.title}</h2>
-              <p className="mt-3 text-sm leading-7 text-white/64">{currentMode.description}</p>
+              <h2 className="font-heading text-3xl font-bold">{currentMode.title}</h2>
             </div>
             <div className="flex h-14 w-14 items-center justify-center rounded-[20px] border border-white/10 bg-black/16">
               <CurrentIcon className="h-6 w-6 text-[var(--color-accent)]" />
@@ -531,7 +538,6 @@ export function TabletKiosk() {
                     }`}
                   >
                     <p className="font-semibold">Ev sahibini ara</p>
-                    <p className="mt-2 text-sm text-white/58">Anlık bildirim gönderilir.</p>
                   </motion.button>
                   <motion.button
                     type="button"
@@ -544,7 +550,6 @@ export function TabletKiosk() {
                     }`}
                   >
                     <p className="font-semibold">QR ile geldim</p>
-                    <p className="mt-2 text-sm text-white/58">QR ve tek kullanımlık şifre istenir.</p>
                   </motion.button>
                 </div>
                 {guestAccessMode === 'qr' ? (
@@ -557,9 +562,14 @@ export function TabletKiosk() {
                     <input
                       className="app-input rounded-[20px] border-white/10 bg-[#111317] px-4 py-4"
                       value={oneTimePassword}
-                      onChange={(event) => setOneTimePassword(event.target.value)}
-                      placeholder="Tek kullanımlık şifre"
-                      type="password"
+                      onChange={(event) =>
+                        setOneTimePassword(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))
+                      }
+                      placeholder="6 karakterli şifre"
+                      type="text"
+                      autoCapitalize="characters"
+                      autoCorrect="off"
+                      spellCheck={false}
                     />
                   </>
                 ) : null}
@@ -604,8 +614,8 @@ export function TabletKiosk() {
                     type="password"
                   />
                 ) : (
-                  <div className="rounded-[24px] border border-white/8 bg-black/16 p-5 text-sm leading-6 text-white/64">
-                    Kameraya bakarak yüz doğrulamayı başlatın.
+                  <div className="rounded-[24px] border border-white/8 bg-black/16 p-5 text-sm font-medium text-white/72">
+                    Yüz doğrulama hazır.
                   </div>
                 )}
               </>
@@ -653,33 +663,23 @@ export function TabletKiosk() {
   if (screen === 'wait') {
     content = (
       <section className="rounded-[34px] border border-white/10 bg-[linear-gradient(180deg,#17191d_0%,#111317_100%)] p-6 shadow-[0_20px_40px_rgba(0,0,0,0.28)]">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--color-accent)]">Adım 3</p>
-        <h2 className="mt-2 font-heading text-4xl font-bold">Ev sahibine ulaşılıyor</h2>
-        <p className="mt-3 max-w-[36rem] text-base leading-8 text-white/64">
-          Bildirim gönderildi. Yanıta göre kapı açılacak veya sizi danışmaya yönlendireceğiz.
-        </p>
-        <div className="mt-6 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="rounded-[26px] border border-white/8 bg-black/16 p-5">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/42">Çağrı durumu</p>
-            <p className="mt-3 font-heading text-3xl font-bold">
-              {liveRequest ? requestStatusLabel(liveRequest.status) : 'Bağlantı hazırlanıyor'}
-            </p>
-            <p className="mt-3 text-sm text-white/58">
-              {liveRequest ? `${requestTypeLabel(liveRequest.type)} · ${liveRequest.guestName}` : 'İstek oluşturuluyor'}
-            </p>
-          </div>
-          <div className="rounded-[26px] border border-[rgba(212,163,115,0.26)] bg-[rgba(212,163,115,0.08)] p-5">
-            <p className="font-semibold">Hızlı çıkış gerekiyorsa</p>
-            <p className="mt-3 text-sm leading-7 text-[#f3dcc0]">Danışmaya bağlan düğmesiyle güvenlik masasına yönlenebilirsiniz.</p>
-            <motion.button
-              type="button"
-              whileTap={{ scale: 0.98 }}
-              onClick={openConcierge}
-              className="app-button-secondary mt-5 rounded-[18px] px-4 py-3 text-sm uppercase tracking-[0.16em]"
-            >
-              Danışmaya bağlan
-            </motion.button>
-          </div>
+        <h2 className="font-heading text-4xl font-bold">Bekleniyor</h2>
+        <div className="mt-6 rounded-[26px] border border-white/8 bg-black/16 p-5">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/42">Çağrı durumu</p>
+          <p className="mt-3 font-heading text-3xl font-bold">
+            {liveRequest ? requestStatusLabel(liveRequest.status) : 'Hazırlanıyor'}
+          </p>
+          <p className="mt-3 text-sm text-white/58">
+            {liveRequest ? `${requestTypeLabel(liveRequest.type)} · ${liveRequest.guestName}` : 'İstek oluşturuluyor'}
+          </p>
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.98 }}
+            onClick={openConcierge}
+            className="app-button-secondary mt-5 rounded-[18px] px-4 py-3 text-sm uppercase tracking-[0.16em]"
+          >
+            Danışmaya bağlan
+          </motion.button>
         </div>
       </section>
     );
@@ -688,8 +688,7 @@ export function TabletKiosk() {
   if (screen === 'success' && successState) {
     content = (
       <section className="rounded-[34px] border border-white/10 bg-[linear-gradient(180deg,#17191d_0%,#111317_100%)] p-6 shadow-[0_20px_40px_rgba(0,0,0,0.28)]">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--color-accent)]">Tamamlandı</p>
-        <h2 className="mt-2 font-heading text-4xl font-bold">{successState.title}</h2>
+        <h2 className="font-heading text-4xl font-bold">{successState.title}</h2>
         <p className="mt-4 max-w-[38rem] text-base leading-8 text-white/64">{successState.body}</p>
         <div className="mt-6 flex flex-wrap gap-3">
           <motion.button
@@ -716,48 +715,17 @@ export function TabletKiosk() {
   return (
     <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(212,163,115,0.18),transparent_22%),linear-gradient(180deg,#0d0e10_0%,#121418_100%)] px-4 py-4 text-[var(--color-text)] md:px-6">
       <section className="mx-auto grid min-h-[calc(100vh-32px)] max-w-[1600px] overflow-hidden rounded-[36px] border border-white/8 bg-[#0f1114] shadow-[0_36px_90px_rgba(0,0,0,0.44)] xl:grid-cols-[360px_minmax(0,1fr)]">
-        <aside className="border-b border-black/8 bg-[#efe4cf] px-6 py-6 text-[#181818] xl:border-b-0 xl:border-r">
+        <aside className="border-b border-white/8 bg-[linear-gradient(180deg,#121418_0%,#0d0f12_100%)] px-6 py-6 text-white xl:border-b-0 xl:border-r xl:border-white/8">
           <BrandLogo size="md" />
-          <div className="mt-6 inline-flex rounded-full border border-black/12 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]">
-            Terminal ekranı
-          </div>
-          <h1 className="mt-5 font-heading text-4xl font-bold leading-[0.94]">
-            Lobi girişini adım adım yönetin.
-          </h1>
-          <p className="mt-4 text-sm leading-7 text-black/68">
-            Büyük butonlar, sade kararlar ve yanlış yönlendirmeyi azaltan net bir akış.
-          </p>
-
-          <div className="mt-8 rounded-[30px] bg-white/70 p-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-black/46">Aktif terminal</p>
+          <div className="mt-8 rounded-[30px] border border-white/10 bg-[linear-gradient(180deg,#181a1f_0%,#111317_100%)] p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/46">Aktif terminal</p>
             <p className="mt-3 font-heading text-3xl font-bold">{selectedBuilding?.doorLabel ?? 'Lobi girişi'}</p>
-            <div className="mt-4 flex items-start gap-3 text-sm text-black/64">
-              <Building2 className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="mt-4 flex items-start gap-3 text-sm text-white/62">
+              <Building2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-accent)]" />
               <div>
-                <p className="font-semibold text-black">{selectedBuilding?.name ?? 'Giriş noktası'}</p>
+                <p className="font-semibold text-white">{selectedBuilding?.name ?? 'Giriş noktası'}</p>
                 <p className="mt-1">{selectedBuilding?.address}</p>
               </div>
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-[30px] bg-[#18191d] p-5 text-[#f7f1e6]">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/46">Son çağrılar</p>
-            <div className="mt-4 space-y-3">
-              {buildingRequests.length ? (
-                buildingRequests.map((request) => (
-                  <div key={request.id} className="rounded-[22px] border border-white/8 bg-black/16 p-4">
-                    <p className="font-semibold">{request.guestName}</p>
-                    <p className="mt-1 text-xs text-white/54">
-                      {requestTypeLabel(request.type)} · {requestStatusLabel(request.status)}
-                    </p>
-                    <p className="mt-2 text-xs text-white/42">{formatDateTime(request.createdAt)}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-[22px] border border-dashed border-white/10 p-4 text-sm text-white/48">
-                  Bu girişte henüz yeni çağrı görünmüyor.
-                </div>
-              )}
             </div>
           </div>
         </aside>
@@ -766,33 +734,17 @@ export function TabletKiosk() {
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(212,163,115,0.1),transparent_24%)]" />
           <div className="relative flex h-full flex-col">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap gap-2">
-                {['Seçim', 'Bilgi', 'Sonuç'].map((item, index) => {
-                  const activeStep =
-                    screen === 'welcome' ? 0 : screen === 'mode' ? 1 : 2;
-                  return (
-                    <span
-                      key={item}
-                      className={`rounded-full border px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
-                        activeStep === index
-                          ? 'border-[var(--color-accent)] bg-[rgba(212,163,115,0.12)] text-[var(--color-accent)]'
-                          : 'border-white/8 text-white/42'
-                      }`}
-                    >
-                      {index + 1}. {item}
-                    </span>
-                  );
-                })}
-              </div>
+              <div />
               {screen !== 'welcome' ? (
                 <motion.button
                   type="button"
                   whileTap={{ scale: 0.98 }}
-                  onClick={() => resetFlow('welcome')}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-white/72"
+                  disabled={submitting}
+                  onClick={goBack}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/10 px-4 py-2 text-sm font-semibold text-white/72 disabled:opacity-50"
                 >
                   <ArrowLeft className="h-4 w-4" />
-                  Başa dön
+                  Geri
                 </motion.button>
               ) : null}
             </div>
@@ -801,21 +753,13 @@ export function TabletKiosk() {
               <div className="rounded-[34px] border border-white/8 bg-[rgba(255,255,255,0.03)] p-6">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[var(--color-accent)]">
-                      Giriş terminali
-                    </p>
-                    <h2 className="mt-2 font-heading text-4xl font-bold">
+                    <h2 className="font-heading text-4xl font-bold">
                       {screen === 'welcome' ? 'Nasıl yardımcı olalım?' : currentMode.title}
                     </h2>
-                    <p className="mt-3 max-w-[42rem] text-base leading-8 text-white/62">
-                      {screen === 'welcome'
-                        ? 'İlk adımda giriş tipini seçin. Sonraki ekranda daireyi belirleyip işlemi tamamlayın.'
-                        : currentMode.description}
-                    </p>
                   </div>
                   <div className="flex h-16 w-16 items-center justify-center rounded-[24px] border border-white/10 bg-black/18">
                     {screen === 'welcome' ? (
-                      <Sparkles className="h-7 w-7 text-[var(--color-accent)]" />
+                      <AlignHorizontalSpaceAround className="h-7 w-7 text-[var(--color-accent)]" />
                     ) : mode === 'guest' ? (
                       <PhoneCall className="h-7 w-7 text-[var(--color-accent)]" />
                     ) : (

@@ -25,6 +25,19 @@ type AuthContextValue = {
 const AuthContext = createContext<AuthContextValue | null>(null);
 const AUTH_TIMEOUT_MESSAGE = 'Supabase şu anda yanıt vermiyor. Lütfen kısa süre sonra yeniden deneyin.';
 const PROFILE_TIMEOUT_MESSAGE = 'Oturum doğrulandı ancak hesap bilgileri alınamadı.';
+const AUTH_FAILURE_MESSAGE = 'Giriş bilgilerini kontrol edip yeniden deneyin.';
+
+function canAccessRequestedRole(requestedRole: PortalRole, actualRole: PortalRole) {
+  if (requestedRole === 'resident') {
+    return actualRole === 'resident' || actualRole === 'manager';
+  }
+
+  if (requestedRole === 'manager') {
+    return actualRole === 'manager';
+  }
+
+  return actualRole === requestedRole;
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<PortalAuthSession | null>(null);
@@ -143,10 +156,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('Supabase bağlantısı yapılandırılmadı.');
     }
 
-    const normalizedEmail = identifier.trim().toLocaleLowerCase('tr-TR');
+    const resolveResponse = await fetch('/api/auth/resolve', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        identifier,
+        role
+      })
+    });
+
+    const resolveResult = (await resolveResponse.json().catch(() => null)) as
+      | { email?: string; error?: string }
+      | null;
+
+    if (!resolveResponse.ok || !resolveResult?.email) {
+      throw new Error(resolveResult?.error ?? AUTH_FAILURE_MESSAGE);
+    }
+
+    const normalizedEmail = resolveResult.email.trim().toLocaleLowerCase('tr-TR');
+
     setLoading(true);
     let authData: Awaited<ReturnType<typeof client.auth.signInWithPassword>>['data'] | null = null;
     let authError: string | null = null;
+
     try {
       const { data, error } = await withSupabaseTimeout(
         client.auth.signInWithPassword({
@@ -162,16 +196,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         authError = toSupabaseUserMessage(
           error ? new Error(error.message) : null,
-          'E-posta veya şifre bilgisini kontrol edip yeniden deneyin.'
+          AUTH_FAILURE_MESSAGE
         );
       }
     } catch (error) {
-      authError = toSupabaseUserMessage(error, 'E-posta veya şifre bilgisini kontrol edip yeniden deneyin.');
+      authError = toSupabaseUserMessage(error, AUTH_FAILURE_MESSAGE);
     }
 
     if (!authData?.session) {
       setLoading(false);
-      throw new Error(authError ?? 'E-posta veya şifre bilgisini kontrol edip yeniden deneyin.');
+      throw new Error(authError ?? AUTH_FAILURE_MESSAGE);
     }
 
     let nextSession: PortalAuthSession;
@@ -188,7 +222,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(toSupabaseUserMessage(error, PROFILE_TIMEOUT_MESSAGE));
     }
 
-    if (nextSession.user.role !== role) {
+    if (!canAccessRequestedRole(role, nextSession.user.role)) {
       await client.auth.signOut();
       setLoading(false);
       throw new Error('Seçtiğiniz panel için bu hesapla giriş yapılamıyor.');

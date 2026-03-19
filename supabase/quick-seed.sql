@@ -1,13 +1,17 @@
 -- Online Kapıcı hızlı demo kurulumu
 -- Ön koşul:
 -- 1. Authentication > Users altında şu kullanıcılar oluşturulmuş olmalı
---    merkez@onlinekapici.app
---    danisma@onlinekapici.app
---    yonetim.atlas@onlinekapici.app
---    ahmet.yilmaz@onlinekapici.app
---    elif.aksoy@onlinekapici.app
+--    admin@onlinekapici.com
+--    consultant-05320000002@auth.onlinekapici.local
+--    resident-ist-umr-atla-abl-018@auth.onlinekapici.local
+--    resident-ist-umr-atla-abl-012@auth.onlinekapici.local
+--    resident-ist-umr-atla-bbl-005@auth.onlinekapici.local
 --    terminal.atlas.a@onlinekapici.app
--- 2. Hepsinin şifresi: 123456
+-- 2. Şifreler örnek olarak:
+--    admin@onlinekapici.com -> onlinekapici
+--    danışman -> DNM823Q4
+--    yönetici -> BLK18A9Q
+--    sakin -> KP12LM8R / EV05TR7K
 -- 3. Bu dosyayı schema.sql çalıştıktan sonra SQL Editor içinde çalıştırın
 
 begin;
@@ -35,15 +39,16 @@ set
   door_label = excluded.door_label,
   kiosk_code = excluded.kiosk_code;
 
-insert into public.units (id, building_id, unit_number, floor)
+insert into public.units (id, building_id, unit_code, unit_number, floor)
 values
-  ('44444444-4444-4444-8444-444444444444', '22222222-2222-4222-8222-222222222222', '12', 3),
-  ('55555555-5555-4555-8555-555555555555', '22222222-2222-4222-8222-222222222222', '18', 4),
-  ('66666666-6666-4666-8666-666666666666', '33333333-3333-4333-8333-333333333333', '5', 1),
-  ('77777777-7777-4777-8777-777777777777', '33333333-3333-4333-8333-333333333333', '22', 6)
+  ('44444444-4444-4444-8444-444444444444', '22222222-2222-4222-8222-222222222222', 'IST-UMR-ATLA-ABL-012', '12', 3),
+  ('55555555-5555-4555-8555-555555555555', '22222222-2222-4222-8222-222222222222', 'IST-UMR-ATLA-ABL-018', '18', 4),
+  ('66666666-6666-4666-8666-666666666666', '33333333-3333-4333-8333-333333333333', 'IST-UMR-ATLA-BBL-005', '5', 1),
+  ('77777777-7777-4777-8777-777777777777', '33333333-3333-4333-8333-333333333333', 'IST-UMR-ATLA-BBL-022', '22', 6)
 on conflict (id) do update
 set
   building_id = excluded.building_id,
+  unit_code = excluded.unit_code,
   unit_number = excluded.unit_number,
   floor = excluded.floor;
 
@@ -56,9 +61,9 @@ select
   'super_admin'::app_role,
   '05320000001',
   'Merkez Yönetim',
-  'merkez'
+  'admin@onlinekapici.com'
 from auth.users u
-where u.email = 'merkez@onlinekapici.app'
+where u.email = 'admin@onlinekapici.com'
 on conflict (id) do update
 set
   unit_id = excluded.unit_id,
@@ -75,7 +80,7 @@ select
   true,
   now() - interval '30 minutes'
 from auth.users u
-where u.email = 'ahmet.yilmaz@onlinekapici.app'
+where u.email = 'resident-ist-umr-atla-abl-012@auth.onlinekapici.local'
 on conflict (profile_id) do update
 set
   away_mode_enabled = excluded.away_mode_enabled,
@@ -87,7 +92,7 @@ select
   false,
   now() - interval '4 hours'
 from auth.users u
-where u.email = 'elif.aksoy@onlinekapici.app'
+where u.email = 'resident-ist-umr-atla-bbl-005@auth.onlinekapici.local'
 on conflict (profile_id) do update
 set
   away_mode_enabled = excluded.away_mode_enabled,
@@ -102,9 +107,9 @@ select
   'consultant'::app_role,
   '05320000002',
   'Danışma Merkezi',
-  'danisma'
+  '05320000002'
 from auth.users u
-where u.email = 'danisma@onlinekapici.app'
+where u.email = 'consultant-05320000002@auth.onlinekapici.local'
 on conflict (id) do update
 set
   unit_id = excluded.unit_id,
@@ -118,15 +123,15 @@ set
 insert into public.profiles (id, unit_id, primary_building_id, full_name, role, phone, title, login_id)
 select
   u.id,
-  null,
+  '55555555-5555-4555-8555-555555555555'::uuid,
   null,
   'Selin Demir',
   'manager'::app_role,
   '05320000003',
   'Site Yöneticisi',
-  'atlasyonetim'
+  'IST-UMR-ATLA-ABL-018'
 from auth.users u
-where u.email = 'yonetim.atlas@onlinekapici.app'
+where u.email = 'resident-ist-umr-atla-abl-018@auth.onlinekapici.local'
 on conflict (id) do update
 set
   unit_id = excluded.unit_id,
@@ -146,9 +151,9 @@ select
   'resident'::app_role,
   '05551234567',
   'Daire Sakini',
-  '05551234567'
+  'IST-UMR-ATLA-ABL-012'
 from auth.users u
-where u.email = 'ahmet.yilmaz@onlinekapici.app'
+where u.email = 'resident-ist-umr-atla-abl-012@auth.onlinekapici.local'
 on conflict (id) do update
 set
   unit_id = excluded.unit_id,
@@ -168,9 +173,9 @@ select
   'resident'::app_role,
   '05557654321',
   'Daire Sakini',
-  '05557654321'
+  'IST-UMR-ATLA-BBL-005'
 from auth.users u
-where u.email = 'elif.aksoy@onlinekapici.app'
+where u.email = 'resident-ist-umr-atla-bbl-005@auth.onlinekapici.local'
 on conflict (id) do update
 set
   unit_id = excluded.unit_id,
@@ -209,7 +214,7 @@ select
   u.id,
   '11111111-1111-4111-8111-111111111111'::uuid
 from auth.users u
-where u.email = 'yonetim.atlas@onlinekapici.app'
+where u.email = 'resident-ist-umr-atla-abl-018@auth.onlinekapici.local'
 on conflict (profile_id, site_id) do nothing;
 
 insert into public.consultant_site_assignments (id, profile_id, site_id)
@@ -218,7 +223,7 @@ select
   u.id,
   '11111111-1111-4111-8111-111111111111'::uuid
 from auth.users u
-where u.email = 'danisma@onlinekapici.app'
+where u.email = 'consultant-05320000002@auth.onlinekapici.local'
 on conflict (profile_id, site_id) do nothing;
 
 insert into public.announcements (id, site_id, title, summary, category, pinned, published_at)
@@ -306,15 +311,16 @@ set
   phone = excluded.phone,
   note = excluded.note;
 
-insert into public.access_passes (id, unit_id, holder_name, type, status, expires_at)
+insert into public.access_passes (id, unit_id, holder_name, type, access_code, status, expires_at)
 values
-  ('ffffffff-ffff-4fff-8fff-fffffffffff1', '44444444-4444-4444-8444-444444444444', 'Ayşe Yıldız', 'qr', 'active', now() + interval '1 day'),
-  ('ffffffff-ffff-4fff-8fff-fffffffffff2', '44444444-4444-4444-8444-444444444444', 'NFC Kart 04', 'nfc', 'used', now() - interval '1 day')
+  ('ffffffff-ffff-4fff-8fff-fffffffffff1', '44444444-4444-4444-8444-444444444444', 'Ayşe Yıldız', 'qr', 'A7K2Q9', 'active', now() + interval '2 hours'),
+  ('ffffffff-ffff-4fff-8fff-fffffffffff2', '44444444-4444-4444-8444-444444444444', 'Mehmet Arslan', 'qr', 'P4M8T1', 'used', now() - interval '1 day')
 on conflict (id) do update
 set
   unit_id = excluded.unit_id,
   holder_name = excluded.holder_name,
   type = excluded.type,
+  access_code = excluded.access_code,
   status = excluded.status,
   expires_at = excluded.expires_at;
 

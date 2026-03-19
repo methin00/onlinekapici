@@ -65,9 +65,9 @@ type CreateBuildingInput = {
   siteId: string;
   name: string;
   address: string;
-  apiKey: string;
+  apiKey?: string;
   doorLabel: string;
-  kioskCode: string;
+  kioskCode?: string;
 };
 
 type UpdateBuildingInput = {
@@ -92,13 +92,33 @@ type UpdateUnitInput = {
 };
 
 type CreateResidentInput = {
-  email: string;
-  password: string;
   fullName: string;
   phone: string;
   title: string;
-  loginId: string;
   unitId: string;
+};
+
+type UpdateResidentInput = {
+  profileId: string;
+  fullName: string;
+  phone: string;
+  title: string;
+};
+
+type CreateConsultantInput = {
+  fullName: string;
+  phone: string;
+};
+
+type AdminMutationOptions = {
+  refresh?: boolean;
+};
+
+export type GeneratedAccountCredentials = {
+  fullName: string;
+  identifier: string;
+  password: string;
+  role: 'resident' | 'consultant';
 };
 
 type CreateServiceProviderInput = {
@@ -138,7 +158,6 @@ type UpsertSiteInvoicePlanInput = {
 type CreateAccessPassInput = {
   unitId: string;
   holderName: string;
-  type: 'qr' | 'nfc';
 };
 
 type PortalDataContextValue = {
@@ -166,16 +185,28 @@ type PortalDataContextValue = {
   markAnnouncementRead: (announcementId: string, profileId: string) => Promise<void>;
   createPackageRecord: (input: CreatePackageInput) => Promise<void>;
   updatePackageStatus: (packageId: string, status: PackageStatus) => Promise<void>;
-  createSite: (input: CreateSiteInput) => Promise<void>;
+  createSite: (
+    input: CreateSiteInput,
+    options?: AdminMutationOptions
+  ) => Promise<{ siteId: string | null }>;
   updateSiteDetails: (input: UpdateSiteInput) => Promise<void>;
   deleteSite: (siteId: string) => Promise<void>;
-  createBuilding: (input: CreateBuildingInput) => Promise<void>;
+  createBuilding: (
+    input: CreateBuildingInput,
+    options?: AdminMutationOptions
+  ) => Promise<{ buildingId: string | null }>;
   updateBuildingDetails: (input: UpdateBuildingInput) => Promise<void>;
   deleteBuilding: (buildingId: string) => Promise<void>;
-  createUnit: (input: CreateUnitInput) => Promise<void>;
+  createUnit: (
+    input: CreateUnitInput,
+    options?: AdminMutationOptions
+  ) => Promise<{ unitId: string | null; unitCode?: string | null }>;
   updateUnitDetails: (input: UpdateUnitInput) => Promise<void>;
   deleteUnit: (unitId: string) => Promise<void>;
-  createResident: (input: CreateResidentInput) => Promise<void>;
+  createResident: (input: CreateResidentInput) => Promise<GeneratedAccountCredentials>;
+  updateResident: (input: UpdateResidentInput) => Promise<void>;
+  deleteResident: (profileId: string) => Promise<void>;
+  createConsultant: (input: CreateConsultantInput) => Promise<GeneratedAccountCredentials>;
   assignSiteManager: (input: AssignSiteManagerInput) => Promise<void>;
   setConsultantAssignment: (input: SetConsultantAssignmentInput) => Promise<void>;
   upsertSiteInvoicePlan: (input: UpsertSiteInvoicePlanInput) => Promise<void>;
@@ -227,6 +258,15 @@ function createRealtimeTables() {
   ];
 }
 
+const ACCESS_CODE_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+function createAccessCode() {
+  return Array.from({ length: 6 }, () => {
+    const index = Math.floor(Math.random() * ACCESS_CODE_ALPHABET.length);
+    return ACCESS_CODE_ALPHABET[index];
+  }).join('');
+}
+
 export function PortalDataProvider({ children }: { children: ReactNode }) {
   const { session, loading: authLoading } = useAuth();
   const [state, setState] = useState<PortalState>(createEmptyPortalState());
@@ -259,7 +299,7 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     setReady(true);
   }
 
-  async function adminPortalAction(action: string, payload: Record<string, unknown>) {
+  async function adminPortalAction<T = void>(action: string, payload: Record<string, unknown>) {
     if (!session?.token) {
       throw new Error('Bu işlem için geçerli yönetici oturumu gerekiyor.');
     }
@@ -273,11 +313,13 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
       body: JSON.stringify({ action, payload })
     });
 
-    const result = (await response.json().catch(() => null)) as { error?: string } | null;
+    const result = (await response.json().catch(() => null)) as ({ error?: string } & T) | null;
 
     if (!response.ok) {
       throw new Error(result?.error ?? 'Yönetim işlemi tamamlanamadı.');
     }
+
+    return result as T;
   }
 
   async function syncInvoicePlans(siteIds?: string[]) {
@@ -561,27 +603,16 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     await refreshState();
   }
 
-  async function createSite(input: CreateSiteInput) {
-    await adminPortalAction('createSite', input);
-    await refreshState();
+  async function createSite(input: CreateSiteInput, options?: AdminMutationOptions) {
+    const result = await adminPortalAction<{ siteId: string | null }>('createSite', input);
+    if (options?.refresh !== false) {
+      await refreshState();
+    }
+    return result;
   }
 
   async function updateSiteDetails(input: UpdateSiteInput) {
-    const client = assertAuthenticated();
-    const { error } = await client
-      .from('sites')
-      .update({
-        name: input.name.trim(),
-        address: input.address.trim(),
-        district: input.district.trim(),
-        city: input.city.trim()
-      })
-      .eq('id', input.siteId);
-
-    if (error) {
-      throw new Error('Site ayarları güncellenemedi.');
-    }
-
+    await adminPortalAction('updateSite', input);
     await refreshState();
   }
 
@@ -590,28 +621,16 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     await refreshState();
   }
 
-  async function createBuilding(input: CreateBuildingInput) {
-    await adminPortalAction('createBuilding', input);
-    await refreshState();
+  async function createBuilding(input: CreateBuildingInput, options?: AdminMutationOptions) {
+    const result = await adminPortalAction<{ buildingId: string | null }>('createBuilding', input);
+    if (options?.refresh !== false) {
+      await refreshState();
+    }
+    return result;
   }
 
   async function updateBuildingDetails(input: UpdateBuildingInput) {
-    const client = assertAuthenticated();
-    const { error } = await client
-      .from('buildings')
-      .update({
-        name: input.name.trim(),
-        address: input.address.trim(),
-        api_key: input.apiKey.trim(),
-        door_label: input.doorLabel.trim(),
-        kiosk_code: input.kioskCode.trim()
-      })
-      .eq('id', input.buildingId);
-
-    if (error) {
-      throw new Error('Blok detayları güncellenemedi.');
-    }
-
+    await adminPortalAction('updateBuilding', input);
     await refreshState();
   }
 
@@ -620,9 +639,15 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     await refreshState();
   }
 
-  async function createUnit(input: CreateUnitInput) {
-    await adminPortalAction('createUnit', input);
-    await refreshState();
+  async function createUnit(input: CreateUnitInput, options?: AdminMutationOptions) {
+    const result = await adminPortalAction<{ unitId: string | null; unitCode?: string | null }>(
+      'createUnit',
+      input
+    );
+    if (options?.refresh !== false) {
+      await refreshState();
+    }
+    return result;
   }
 
   async function updateUnitDetails(input: UpdateUnitInput) {
@@ -636,8 +661,31 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
   }
 
   async function createResident(input: CreateResidentInput) {
-    await adminPortalAction('createResident', input);
+    const result = await adminPortalAction<{ credentials: GeneratedAccountCredentials }>(
+      'createResident',
+      input
+    );
     await refreshState();
+    return result.credentials;
+  }
+
+  async function updateResident(input: UpdateResidentInput) {
+    await adminPortalAction('updateResident', input);
+    await refreshState();
+  }
+
+  async function deleteResident(profileId: string) {
+    await adminPortalAction('deleteResident', { profileId });
+    await refreshState();
+  }
+
+  async function createConsultant(input: CreateConsultantInput) {
+    const result = await adminPortalAction<{ credentials: GeneratedAccountCredentials }>(
+      'createConsultant',
+      input
+    );
+    await refreshState();
+    return result.credentials;
   }
 
   async function assignSiteManager(input: AssignSiteManagerInput) {
@@ -723,19 +771,33 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
 
   async function createAccessPass(input: CreateAccessPassInput) {
     const client = assertAuthenticated();
-    const { error } = await client.from('access_passes').insert({
-      unit_id: input.unitId,
-      holder_name: input.holderName.trim(),
-      type: input.type,
-      status: 'active',
-      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-    });
+    let lastError: Error | null = null;
 
-    if (error) {
-      throw new Error('Geçiş kaydı oluşturulamadı.');
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const { error } = await client.from('access_passes').insert({
+        unit_id: input.unitId,
+        holder_name: input.holderName.trim(),
+        type: 'qr',
+        access_code: createAccessCode(),
+        status: 'active',
+        expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+      });
+
+      if (!error) {
+        await refreshState();
+        return;
+      }
+
+      const normalizedMessage = error.message.toLocaleLowerCase('tr-tr');
+
+      if (!normalizedMessage.includes('duplicate') && !normalizedMessage.includes('unique')) {
+        throw new Error('Geçiş kaydı oluşturulamadı.');
+      }
+
+      lastError = new Error('Geçiş kodu oluşturulurken çakışma yaşandı.');
     }
 
-    await refreshState();
+    throw lastError ?? new Error('Geçiş kaydı oluşturulamadı.');
   }
 
   async function consumeAccessPass(passId: string) {
@@ -777,6 +839,9 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
       updateUnitDetails,
       deleteUnit,
       createResident,
+      updateResident,
+      deleteResident,
+      createConsultant,
       assignSiteManager,
       setConsultantAssignment,
       upsertSiteInvoicePlan,

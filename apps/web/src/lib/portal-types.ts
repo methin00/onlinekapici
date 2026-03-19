@@ -7,7 +7,7 @@ export type GuestRequestStatus = 'pending' | 'approved' | 'rejected' | 'redirect
 export type InvoiceStatus = 'paid' | 'unpaid' | 'overdue';
 export type PackageStatus = 'at_desk' | 'on_the_way' | 'delivered';
 export type ProviderCategory = 'Temizlik' | 'Elektrik' | 'Tesisat' | 'Asansör' | 'Nakliyat' | 'Peyzaj';
-export type AccessPassType = 'qr' | 'nfc';
+export type AccessPassType = 'qr';
 export type AccessPassStatus = 'active' | 'used' | 'expired';
 export type NotificationTone = 'info' | 'success' | 'warning' | 'danger';
 
@@ -34,6 +34,7 @@ export interface Building {
 export interface Unit {
   id: string;
   buildingId: string;
+  unitCode: string;
   unitNumber: string;
   floor: number;
   createdAt?: string;
@@ -176,8 +177,10 @@ export interface AccessPass {
   unitId: string;
   holderName: string;
   type: AccessPassType;
+  accessCode: string;
   status: AccessPassStatus;
   expiresAt: string;
+  createdAt?: string;
 }
 
 export interface NotificationItem {
@@ -241,6 +244,7 @@ export interface PortalSessionUser {
   siteIds: string[];
   buildingIds: string[];
   unitId?: string;
+  unitCode?: string;
 }
 
 export interface PortalAuthSession {

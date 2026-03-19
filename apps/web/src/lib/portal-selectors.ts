@@ -212,7 +212,7 @@ export function unitLabel(state: PortalState, unitId: string) {
   }
 
   const building = getBuildingById(state, unit.buildingId);
-  return `${building?.name ?? 'Blok'} · Daire ${unit.unitNumber}`;
+  return `${building?.name ?? 'Blok'} · Daire ${unit.unitNumber} · ${unit.unitCode}`;
 }
 
 export function buildUnitResidentRows(state: PortalState, buildings: Building[], units: Unit[], profiles: Profile[]) {

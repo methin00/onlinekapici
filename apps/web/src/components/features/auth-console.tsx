@@ -65,6 +65,40 @@ function getDemoCredentials(role: PortalRole) {
   return demoCredentialMap[role];
 }
 
+function getIdentifierMeta(role: PortalRole) {
+  switch (role) {
+    case 'super_admin':
+      return {
+        label: 'E-posta adresi',
+        placeholder: 'admin@onlinekapici.com',
+        type: 'email' as const,
+        autoComplete: 'email'
+      };
+    case 'consultant':
+      return {
+        label: 'Telefon numarası',
+        placeholder: '05xxxxxxxxx',
+        type: 'tel' as const,
+        autoComplete: 'tel'
+      };
+    case 'manager':
+    case 'resident':
+      return {
+        label: 'Daire ID',
+        placeholder: 'IST-UMR-ATLA-ABL-012',
+        type: 'text' as const,
+        autoComplete: 'username'
+      };
+    case 'kiosk_device':
+      return {
+        label: 'Terminal kodu',
+        placeholder: 'atlas-a',
+        type: 'text' as const,
+        autoComplete: 'username'
+      };
+  }
+}
+
 export function AuthConsole() {
   const { session, loading, login } = useAuth();
   const { showToast } = useToast();
@@ -74,7 +108,7 @@ export function AuthConsole() {
   const redirectTarget = searchParams.get('redirect');
 
   const [selectedRole, setSelectedRole] = useState<PortalRole>(requestedRole);
-  const [identifier, setIdentifier] = useState<string>(getDemoCredentials(requestedRole).email);
+  const [identifier, setIdentifier] = useState<string>(getDemoCredentials(requestedRole).identifier);
   const [password, setPassword] = useState<string>(getDemoCredentials(requestedRole).password);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -82,7 +116,7 @@ export function AuthConsole() {
   useEffect(() => {
     const credentials = getDemoCredentials(requestedRole);
     setSelectedRole(requestedRole);
-    setIdentifier(credentials.email);
+    setIdentifier(credentials.identifier);
     setPassword(credentials.password);
     setMessage(null);
   }, [requestedRole]);
@@ -99,6 +133,7 @@ export function AuthConsole() {
     () => roleOptions.find((item) => item.role === selectedRole) ?? roleOptions[0],
     [selectedRole]
   );
+  const identifierMeta = useMemo(() => getIdentifierMeta(selectedRole), [selectedRole]);
 
   return (
     <main className="app-shell min-h-screen px-4 py-8 md:py-12">
@@ -131,7 +166,7 @@ export function AuthConsole() {
                   onClick={() => {
                     const credentials = getDemoCredentials(item.role);
                     setSelectedRole(item.role);
-                    setIdentifier(credentials.email);
+                    setIdentifier(credentials.identifier);
                     setPassword(credentials.password);
                     setMessage(null);
                   }}
@@ -173,14 +208,14 @@ export function AuthConsole() {
 
           <div className="mt-8 space-y-5">
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-[var(--color-muted)]">E-posta adresi</label>
+              <label className="text-sm font-semibold text-[var(--color-muted)]">{identifierMeta.label}</label>
               <input
                 className="app-input px-4 py-4"
                 value={identifier}
                 onChange={(event) => setIdentifier(event.target.value)}
-                placeholder="ornek@onlinekapici.app"
-                type="email"
-                autoComplete="email"
+                placeholder={identifierMeta.placeholder}
+                type={identifierMeta.type}
+                autoComplete={identifierMeta.autoComplete}
               />
             </div>
 

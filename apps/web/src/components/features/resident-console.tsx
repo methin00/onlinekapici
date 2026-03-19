@@ -3,17 +3,17 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   ArrowUpRight,
+  ChevronDown,
   Building2,
   CreditCard,
   Droplets,
   Hammer,
   KeyRound,
+  LogOut,
   Megaphone,
   MoonStar,
   Package,
   Phone,
-  QrCode,
-  ScanLine,
   ShieldAlert,
   SunMedium,
   Truck,
@@ -21,6 +21,7 @@ import {
   Wrench
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import QRCode from 'qrcode';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useAuth } from '../providers/auth-provider';
 import { usePanelTheme } from '../providers/panel-theme-provider';
@@ -47,7 +48,7 @@ import {
 } from '@/lib/portal-selectors';
 
 type ResidentTab = 'home' | 'visitors' | 'packages' | 'payments' | 'services' | 'management' | 'announcements';
-type ManagementView = 'menu' | 'announcements' | 'invoices' | 'unit-detail';
+type ManagementView = 'menu' | 'announcements' | 'invoices' | 'packages' | 'units' | 'unit-detail';
 type DisplayServiceCategory = 'Temizlik' | 'Tadilat' | 'Nakliyat' | 'Tesisat';
 
 const TAB_ITEMS = [
@@ -136,14 +137,50 @@ function invoiceStatusLabel(status: 'paid' | 'unpaid' | 'overdue') {
   return 'Bekliyor';
 }
 
+function isQrPassActive(pass: { type: 'qr'; status: 'active' | 'used' | 'expired'; expiresAt: string }) {
+  return pass.type === 'qr' && pass.status === 'active' && new Date(pass.expiresAt).getTime() > Date.now();
+}
+
+function AccessPassQrPreview({ value, alt }: { value: string; alt: string }) {
+  const [dataUrl, setDataUrl] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void QRCode.toDataURL(value, {
+      margin: 1,
+      width: 168,
+      color: {
+        dark: '#111111',
+        light: '#ffffff'
+      }
+    }).then((url: string) => {
+      if (!cancelled) {
+        setDataUrl(url);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [value]);
+
+  if (!dataUrl) {
+    return <div className="h-28 w-28 animate-pulse rounded-[16px] bg-black/6" />;
+  }
+
+  return <img src={dataUrl} alt={alt} className="h-28 w-28 rounded-[16px]" />;
+}
+
 export function ResidentConsole() {
-  const { session } = useAuth();
+  const { session, logout } = useAuth();
   const { mode, toggleMode } = usePanelTheme();
   const {
     state,
     updateGuestRequest,
     triggerGate,
     createAccessPass,
+    updatePackageStatus,
     setResidentAwayMode,
     createAnnouncement,
     setInvoiceStatus,
@@ -153,7 +190,6 @@ export function ResidentConsole() {
 
   const [activeTab, setActiveTab] = useState<ResidentTab>('home');
   const [passHolderName, setPassHolderName] = useState('');
-  const [passType, setPassType] = useState<'qr' | 'nfc'>('qr');
   const [actionLoading, setActionLoading] = useState(false);
   const [modalRequestId, setModalRequestId] = useState<string | null>(null);
   const [announcementTitle, setAnnouncementTitle] = useState('');
@@ -164,9 +200,13 @@ export function ResidentConsole() {
   const [selectedServiceCategory, setSelectedServiceCategory] = useState<DisplayServiceCategory | null>(null);
   const [managementView, setManagementView] = useState<ManagementView>('menu');
   const [selectedManagedUnitId, setSelectedManagedUnitId] = useState<string | null>(null);
+  const [unitDetailBackView, setUnitDetailBackView] = useState<'invoices' | 'units' | 'packages'>(
+    'invoices'
+  );
   const [invoiceAmountInput, setInvoiceAmountInput] = useState('');
   const [invoiceDueDayInput, setInvoiceDueDayInput] = useState('10');
   const [invoicePlanActive, setInvoicePlanActive] = useState(true);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
 
   const currentUser = session?.user ?? null;
   const isManager = currentUser?.role === 'manager';
@@ -229,13 +269,16 @@ export function ResidentConsole() {
       return [];
     }
 
+    return ownPackages;
+  }, [currentUser, ownPackages]);
+  const managedPackages = useMemo(() => {
     if (!isManager) {
-      return ownPackages;
+      return [];
     }
 
     const unitIds = new Set(visibleUnits.map((unit) => unit.id));
     return state.packages.filter((item) => unitIds.has(item.unitId));
-  }, [currentUser, isManager, ownPackages, state.packages, visibleUnits]);
+  }, [isManager, state.packages, visibleUnits]);
   const notifications = useMemo(
     () =>
       currentUser
@@ -262,19 +305,9 @@ export function ResidentConsole() {
 
   const currentInvoice = ownInvoices[0] ?? null;
   const ownAtDeskPackages = ownPackages.filter((item) => item.status === 'at_desk');
-  const visibleAtDeskPackages = visiblePackages.filter((item) => item.status === 'at_desk');
-  const activePasses = passes.filter((item) => item.status === 'active');
+  const managedAtDeskPackages = managedPackages.filter((item) => item.status === 'at_desk');
+  const activePasses = passes.filter((item) => isQrPassActive(item));
   const latestAnnouncement = announcements[0] ?? null;
-  const latestManagedRequest = managedRequests[0] ?? null;
-  const managerCards = useMemo(
-    () => ({
-      buildingCount: visibleBuildings.length,
-      residentCount: siteRows.filter((row) => row.resident).length,
-      packageCount: visibleAtDeskPackages.length,
-      providerCount: providers.length
-    }),
-    [providers.length, siteRows, visibleAtDeskPackages.length, visibleBuildings.length]
-  );
   const managedPendingCount = useMemo(
     () => managedRequests.filter((request) => request.status === 'pending').length,
     [managedRequests]
@@ -377,7 +410,12 @@ export function ResidentConsole() {
     if (activeTab !== 'management') {
       setManagementView('menu');
       setSelectedManagedUnitId(null);
+      setUnitDetailBackView('invoices');
     }
+  }, [activeTab]);
+
+  useEffect(() => {
+    setProfileMenuOpen(false);
   }, [activeTab]);
 
   useEffect(() => {
@@ -408,6 +446,13 @@ export function ResidentConsole() {
   }
 
   const user = currentUser;
+  const canToggleAwayMode = user.role === 'resident';
+
+  function openManagedUnitDetail(unitId: string, backView: 'invoices' | 'units' | 'packages') {
+    setSelectedManagedUnitId(unitId);
+    setUnitDetailBackView(backView);
+    setManagementView('unit-detail');
+  }
 
   async function handleApprove() {
     if (!pendingRequest) {
@@ -476,15 +521,29 @@ export function ResidentConsole() {
 
     await createAccessPass({
       unitId: user.unitId,
-      holderName: passHolderName.trim(),
-      type: passType
+      holderName: passHolderName.trim()
     });
 
     setPassHolderName('');
     showToast({
       tone: 'success',
-      message: passType === 'qr' ? 'Yeni QR geçişi oluşturuldu.' : 'Yeni NFC geçişi oluşturuldu.'
+      message: 'Yeni QR geçişi oluşturuldu.'
     });
+  }
+
+  async function handleReceivePackage(packageId: string) {
+    setActionLoading(true);
+    try {
+      await updatePackageStatus(packageId, 'delivered');
+      showToast({ tone: 'success', message: 'Kargo teslim alındı olarak işaretlendi.' });
+    } catch (error) {
+      showToast({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : 'Kargo kaydı güncellenemedi.'
+      });
+    } finally {
+      setActionLoading(false);
+    }
   }
 
   async function handleToggleAwayMode() {
@@ -583,21 +642,21 @@ export function ResidentConsole() {
     }
   }
 
+  async function handleLogout() {
+    setProfileMenuOpen(false);
+    await logout();
+  }
+
   let tabContent: ReactNode = null;
 
   if (activeTab === 'home') {
     tabContent = (
       <div className="space-y-3.5">
         <section className="rounded-[24px] border border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] p-4 shadow-[0_16px_36px_rgba(0,0,0,0.22)]">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
             <span className="truncate rounded-full border border-white/10 bg-black/20 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/72">
               {residentUnitLabel}
             </span>
-            {isManager ? (
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-accent)]">
-                {managedSite?.name ?? 'Site'}
-              </span>
-            ) : null}
           </div>
 
           <motion.button
@@ -622,7 +681,7 @@ export function ResidentConsole() {
             </div>
             <div className="rounded-[16px] border border-white/10 bg-black/18 px-3 py-3 text-center">
               <p className="text-[1.2rem] font-bold leading-none">{activePasses.length}</p>
-              <p className="mt-1 text-[10px] text-white/54">Geçiş</p>
+              <p className="mt-1 text-[10px] text-white/54">QR</p>
             </div>
           </div>
         </section>
@@ -637,6 +696,7 @@ export function ResidentConsole() {
                     <div>
                       <p className="font-semibold">{item.title}</p>
                       <p className="mt-2 line-clamp-2 text-[13px] leading-6 text-white/62">{item.body}</p>
+                      <p className="mt-3 text-[12px] text-white/46">{formatDateTime(item.createdAt)}</p>
                     </div>
                     <ArrowUpRight className="mt-0.5 h-5 w-5 text-[var(--color-accent)]" />
                   </div>
@@ -662,9 +722,9 @@ export function ResidentConsole() {
             <p className="mt-1 text-[11px] text-[var(--color-accent)]">Teslim alınacak kargo</p>
           </div>
           <div className={CARD_CLASS}>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Geçiş</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">QR</p>
             <p className="mt-2 font-heading text-[1.7rem] font-bold">{activePasses.length}</p>
-            <p className="mt-1 text-[11px] text-[var(--color-accent)]">Aktif QR ve NFC</p>
+            <p className="mt-1 text-[11px] text-[var(--color-accent)]">Aktif geçici erişim</p>
           </div>
           <div className={CARD_CLASS}>
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Bu ay</p>
@@ -680,46 +740,6 @@ export function ResidentConsole() {
             </p>
           </div>
         </section>
-
-        {isManager ? (
-          <section className={SECTION_CLASS}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Ek yetkiler</p>
-                <h2 className="mt-2 font-heading text-[1.35rem] font-bold">Site görünümü</h2>
-              </div>
-              <span className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--color-accent)]">
-                {managedSite?.name ?? 'Site'}
-              </span>
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-2.5">
-              <div className={CARD_CLASS}>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Blok</p>
-                <p className="mt-2 font-heading text-[1.6rem] font-bold">{managerCards.buildingCount}</p>
-              </div>
-              <div className={CARD_CLASS}>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Sakin</p>
-                <p className="mt-2 font-heading text-[1.6rem] font-bold">{managerCards.residentCount}</p>
-              </div>
-              <div className={CARD_CLASS}>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Kargo</p>
-                <p className="mt-2 font-heading text-[1.6rem] font-bold">{managerCards.packageCount}</p>
-              </div>
-              <div className={CARD_CLASS}>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Servis</p>
-                <p className="mt-2 font-heading text-[1.6rem] font-bold">{managerCards.providerCount}</p>
-              </div>
-            </div>
-            <div className={`${CARD_CLASS} mt-3`}>
-              <p className="text-sm font-semibold">Son site hareketi</p>
-              <p className="mt-2 text-[13px] leading-6 text-white/62">
-                {latestManagedRequest
-                  ? `${requestTypeLabel(latestManagedRequest.type)} · ${latestManagedRequest.guestName}`
-                  : 'Şu anda yeni site hareketi görünmüyor.'}
-              </p>
-            </div>
-          </section>
-        ) : null}
 
         <section className={SECTION_CLASS}>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Bugün</p>
@@ -786,39 +806,6 @@ export function ResidentConsole() {
   if (activeTab === 'visitors') {
     tabContent = (
       <div className="space-y-4">
-        {isManager ? (
-          <section className={SECTION_CLASS}>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Ek görünüm</p>
-            <h2 className="mt-2 font-heading text-[1.35rem] font-bold">Sitedeki daireler ve sakinler</h2>
-            <div className="mt-4 space-y-3">
-              {siteRows.length ? (
-                siteRows.map((row) => (
-                  <div key={row.unit.id} className={CARD_CLASS}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold">
-                          {row.building?.name ?? 'Blok'} · Daire {row.unit.unitNumber}
-                        </p>
-                        <p className="mt-2 text-[13px] text-white/62">
-                          {row.resident?.fullName ?? 'Henüz sakin atanmamış'}
-                        </p>
-                      </div>
-                      <span className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/54">
-                        Kat {row.unit.floor}
-                      </span>
-                    </div>
-                    <p className="mt-3 text-[12px] text-white/48">{row.resident?.phone ?? 'Telefon bilgisi yok'}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-[22px] border border-dashed border-white/10 bg-black/12 p-6 text-sm text-white/54">
-                  Görüntülenecek daire kaydı bulunmuyor.
-                </div>
-              )}
-            </div>
-          </section>
-        ) : null}
-
         <section className={SECTION_CLASS}>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Kapı akışı</p>
           <h2 className="mt-2 font-heading text-[1.35rem] font-bold">Ziyaret ve girişler</h2>
@@ -828,7 +815,7 @@ export function ResidentConsole() {
               <p className="mt-3 font-heading text-[1.8rem] font-bold">{residentRequests.length}</p>
             </div>
             <div className={CARD_CLASS}>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/46">Aktif geçiş</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/46">Aktif QR</p>
               <p className="mt-3 font-heading text-[1.8rem] font-bold">{activePasses.length}</p>
             </div>
           </div>
@@ -863,43 +850,49 @@ export function ResidentConsole() {
 
         <section className={SECTION_CLASS}>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Geçici erişim</p>
-          <h2 className="mt-2 font-heading text-[1.35rem] font-bold">QR ve NFC oluştur</h2>
+          <h2 className="mt-2 font-heading text-[1.35rem] font-bold">QR erişimi oluştur</h2>
           <div className="mt-4 space-y-3">
             <input
               className="app-input rounded-[18px] px-4 py-3.5"
               value={passHolderName}
               onChange={(event) => setPassHolderName(event.target.value)}
-              placeholder="Geçiş sahibinin adı"
+              placeholder="Misafir adı"
               type="text"
             />
-            <div className="grid grid-cols-2 gap-3">
-              <motion.button
-                type="button"
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setPassType('qr')}
-                className={`${CARD_CLASS} ${passType === 'qr' ? 'border-[var(--color-accent)] bg-[rgba(212,163,115,0.14)]' : ''}`}
-              >
-                <QrCode className="mx-auto h-5 w-5 text-[var(--color-accent)]" />
-                <p className="mt-2 text-sm font-semibold">QR geçişi</p>
-              </motion.button>
-              <motion.button
-                type="button"
-                whileTap={{ scale: 0.98 }}
-                onClick={() => setPassType('nfc')}
-                className={`${CARD_CLASS} ${passType === 'nfc' ? 'border-[var(--color-accent)] bg-[rgba(212,163,115,0.14)]' : ''}`}
-              >
-                <ScanLine className="mx-auto h-5 w-5 text-[var(--color-accent)]" />
-                <p className="mt-2 text-sm font-semibold">NFC geçişi</p>
-              </motion.button>
-            </div>
             <motion.button
               type="button"
               whileTap={{ scale: 0.98 }}
               onClick={() => void handleCreatePass()}
               className="app-button w-full rounded-[18px] px-4 py-3.5 text-[11px] uppercase tracking-[0.16em]"
             >
-              Geçiş oluştur
+              QR oluştur
             </motion.button>
+            <div className="space-y-3">
+              {activePasses.length ? (
+                activePasses.map((pass) => (
+                  <div key={pass.id} className="rounded-[22px] border border-white/10 bg-black/12 p-4">
+                    <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+                      <div className="rounded-[20px] bg-white p-3 shadow-[0_12px_24px_rgba(0,0,0,0.18)]">
+                        <AccessPassQrPreview value={pass.accessCode} alt={`${pass.holderName} için QR erişim kodu`} />
+                      </div>
+                      <div className="w-full min-w-0 flex-1 text-center sm:text-left">
+                        <div>
+                          <p className="font-semibold">{pass.holderName}</p>
+                          <p className="mt-2 break-all font-mono text-[1.2rem] font-bold tracking-[0.24em] text-[var(--color-accent)] sm:text-[1.45rem]">
+                            {pass.accessCode}
+                          </p>
+                        </div>
+                        <p className="mt-3 text-[12px] text-white/46">Son geçerlilik: {formatDateTime(pass.expiresAt)}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-[22px] border border-dashed border-white/10 bg-black/12 p-6 text-sm text-white/54">
+                  Aktif QR erişimi bulunmuyor.
+                </div>
+              )}
+            </div>
           </div>
         </section>
       </div>
@@ -913,11 +906,9 @@ export function ResidentConsole() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Teslimat</p>
-              <h2 className="mt-2 font-heading text-[1.2rem] font-bold">
-                {isManager ? 'Site kargoları' : 'Kargolarım'}
-              </h2>
+              <h2 className="mt-2 font-heading text-[1.2rem] font-bold">Kargolarım</h2>
             </div>
-            {!isManager ? (
+            {canToggleAwayMode ? (
               <motion.button
                 type="button"
                 whileTap={{ scale: 0.95 }}
@@ -942,16 +933,14 @@ export function ResidentConsole() {
           <div className="mt-4 grid grid-cols-2 gap-3">
             <div className={CARD_CLASS}>
               <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Bekleyen</p>
-              <p className="mt-2 font-heading text-[1.6rem] font-bold">
-                {isManager ? visibleAtDeskPackages.length : ownAtDeskPackages.length}
-              </p>
+              <p className="mt-2 font-heading text-[1.6rem] font-bold">{ownAtDeskPackages.length}</p>
             </div>
             <div className={`${CARD_CLASS} flex items-center justify-between`}>
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Teslimat modu</p>
                 <p className="mt-2 text-sm font-semibold">{awayModeEnabled ? 'Evde yokum' : 'Standart'}</p>
               </div>
-              {!isManager ? <MoonStar className="h-5 w-5 text-[var(--color-accent)]" /> : <Package className="h-5 w-5 text-[var(--color-accent)]" />}
+              <MoonStar className="h-5 w-5 text-[var(--color-accent)]" />
             </div>
           </div>
         </section>
@@ -966,15 +955,23 @@ export function ResidentConsole() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="font-semibold">{item.courierName}</p>
-                      {isManager ? (
-                        <p className="mt-1 text-[13px] text-white/58">{unitLabel(state, item.unitId)}</p>
-                      ) : null}
                       <p className="mt-2 text-[13px] text-white/58">Giriş zamanı: {formatDateTime(item.arrivedAt)}</p>
                     </div>
                     <span className={`rounded-full border px-3 py-1 text-[10px] font-semibold ${statusChipClass(item.status)}`}>
                       {packageStatusLabel(item.status)}
                     </span>
                   </div>
+                  {item.status === 'at_desk' ? (
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.97 }}
+                      onClick={() => void handleReceivePackage(item.id)}
+                      disabled={actionLoading}
+                      className="mt-4 rounded-[14px] border border-[var(--color-accent)] px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-accent)] disabled:opacity-50"
+                    >
+                      TESLİM ALDIM
+                    </motion.button>
+                  ) : null}
                   {item.deliveredAt ? (
                     <p className="mt-3 text-[12px] text-white/46">Teslim: {formatDateTime(item.deliveredAt)}</p>
                   ) : null}
@@ -1132,9 +1129,6 @@ export function ResidentConsole() {
             <section className={SECTION_CLASS}>
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Yönetim</p>
               <h2 className="mt-2 font-heading text-[1.35rem] font-bold">Site yönetim merkezi</h2>
-              <p className="mt-2 text-[13px] leading-6 text-white/62">
-                Duyuruları ve aidat sürecini tek bir akıştan yönetin.
-              </p>
               <div className="mt-4 grid grid-cols-2 gap-3">
                 <motion.button
                   type="button"
@@ -1144,7 +1138,6 @@ export function ResidentConsole() {
                 >
                   <Megaphone className="h-5 w-5 text-[var(--color-accent)]" />
                   <p className="mt-3 text-sm font-semibold">Duyuru Yap</p>
-                  <p className="mt-1 text-[12px] leading-5 text-white/52">Sakinlere tek ekrandan duyuru paylaş.</p>
                 </motion.button>
                 <motion.button
                   type="button"
@@ -1154,7 +1147,24 @@ export function ResidentConsole() {
                 >
                   <CreditCard className="h-5 w-5 text-[var(--color-accent)]" />
                   <p className="mt-3 text-sm font-semibold">Aidatlar</p>
-                  <p className="mt-1 text-[12px] leading-5 text-white/52">Aylık planı kur, blok blok takibi izle.</p>
+                </motion.button>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => setManagementView('packages')}
+                  className={`${CARD_CLASS} text-left`}
+                >
+                  <Package className="h-5 w-5 text-[var(--color-accent)]" />
+                  <p className="mt-3 text-sm font-semibold">Site Kargoları</p>
+                </motion.button>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() => setManagementView('units')}
+                  className={`${CARD_CLASS} text-left`}
+                >
+                  <Building2 className="h-5 w-5 text-[var(--color-accent)]" />
+                  <p className="mt-3 text-sm font-semibold">Siteler ve Daireler</p>
                 </motion.button>
               </div>
             </section>
@@ -1377,21 +1387,19 @@ export function ResidentConsole() {
 
                           return (
                             <div key={row.unit.id} className={CARD_CLASS}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedManagedUnitId(row.unit.id);
-                                  setManagementView('unit-detail');
-                                }}
-                                className="w-full text-left"
-                              >
-                                <div className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <p className="font-semibold">
-                                      {building.name} · Daire {row.unit.unitNumber}
-                                    </p>
-                                    <p className="mt-2 text-[13px] text-white/62">
-                                      {row.resident?.fullName ?? 'Sakin atanmamış'}
+                                <button
+                                  type="button"
+                                  onClick={() => openManagedUnitDetail(row.unit.id, 'invoices')}
+                                  className="w-full text-left"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <p className="inline-flex items-center gap-2 font-semibold text-[var(--color-accent)] underline decoration-white/0 underline-offset-4 transition hover:decoration-[var(--color-accent)]">
+                                        {building.name} · Daire {row.unit.unitNumber}
+                                        <ArrowUpRight className="h-4 w-4" />
+                                      </p>
+                                      <p className="mt-2 text-[13px] text-white/62">
+                                        {row.resident?.fullName ?? 'Sakin atanmamış'}
                                     </p>
                                     <p className="mt-2 text-[12px] text-white/48">
                                       {latestInvoice
@@ -1438,10 +1446,7 @@ export function ResidentConsole() {
                                 ) : (
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      setSelectedManagedUnitId(row.unit.id);
-                                      setManagementView('unit-detail');
-                                    }}
+                                    onClick={() => openManagedUnitDetail(row.unit.id, 'invoices')}
                                     className="rounded-[14px] border border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/58"
                                   >
                                     Detay
@@ -1464,6 +1469,141 @@ export function ResidentConsole() {
           </>
         ) : null}
 
+        {managementView === 'packages' ? (
+          <>
+            <section className={SECTION_CLASS}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Site kargoları</p>
+                  <h2 className="mt-2 font-heading text-[1.2rem] font-bold">Genel teslimat görünümü</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setManagementView('menu')}
+                  className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/60"
+                >
+                  Geri
+                </button>
+              </div>
+              <div className="mt-4 grid grid-cols-3 gap-2.5">
+                <div className={CARD_CLASS}>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Bekleyen</p>
+                  <p className="mt-2 font-heading text-[1.5rem] font-bold">{managedAtDeskPackages.length}</p>
+                </div>
+                <div className={CARD_CLASS}>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Toplam</p>
+                  <p className="mt-2 font-heading text-[1.5rem] font-bold">{managedPackages.length}</p>
+                </div>
+                <div className={CARD_CLASS}>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-white/42">Blok</p>
+                  <p className="mt-2 font-heading text-[1.5rem] font-bold">{visibleBuildings.length}</p>
+                </div>
+              </div>
+            </section>
+
+            <section className={SECTION_CLASS}>
+              <div className="mt-1 space-y-3">
+                {managedPackages.length ? (
+                  managedPackages.map((item) => (
+                    <div key={item.id} className={CARD_CLASS}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => openManagedUnitDetail(item.unitId, 'packages')}
+                            className="inline-flex items-center gap-2 text-left font-semibold text-[var(--color-accent)] underline decoration-white/0 underline-offset-4 transition hover:decoration-[var(--color-accent)]"
+                          >
+                            {unitLabel(state, item.unitId)}
+                            <ArrowUpRight className="h-4 w-4" />
+                          </button>
+                          <p className="mt-2 text-[13px] text-white/62">{item.courierName}</p>
+                          <p className="mt-2 text-[12px] text-white/48">Giriş: {formatDateTime(item.arrivedAt)}</p>
+                        </div>
+                        <span className={`rounded-full border px-3 py-1 text-[10px] font-semibold ${statusChipClass(item.status)}`}>
+                          {packageStatusLabel(item.status)}
+                        </span>
+                      </div>
+                      {item.deliveredAt ? (
+                        <p className="mt-3 text-[12px] text-white/46">Teslim: {formatDateTime(item.deliveredAt)}</p>
+                      ) : null}
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-[22px] border border-dashed border-white/10 bg-black/12 p-6 text-sm text-white/54">
+                    Görüntülenecek site kargosu bulunmuyor.
+                  </div>
+                )}
+              </div>
+            </section>
+          </>
+        ) : null}
+
+        {managementView === 'units' ? (
+          <>
+            <section className={SECTION_CLASS}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/46">Siteler ve daireler</p>
+                  <h2 className="mt-2 font-heading text-[1.2rem] font-bold">{managedSite?.name ?? 'Site görünümü'}</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setManagementView('menu')}
+                  className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/60"
+                >
+                  Geri
+                </button>
+              </div>
+            </section>
+
+            <section className={SECTION_CLASS}>
+              <div className="space-y-4">
+                {managedUnitsByBuilding.length ? (
+                  managedUnitsByBuilding.map(({ building, rows }) => (
+                    <div key={building.id} className="rounded-[22px] border border-white/10 bg-black/12 p-3.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="font-heading text-[1.1rem] font-bold">{building.name}</h3>
+                        <span className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/58">
+                          {rows.length} daire
+                        </span>
+                      </div>
+                      <div className="mt-3 space-y-3">
+                        {rows.map((row) => (
+                          <div key={row.unit.id} className={CARD_CLASS}>
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <button
+                                  type="button"
+                                  onClick={() => openManagedUnitDetail(row.unit.id, 'units')}
+                                  className="inline-flex items-center gap-2 text-left font-semibold text-[var(--color-accent)] underline decoration-white/0 underline-offset-4 transition hover:decoration-[var(--color-accent)]"
+                                >
+                                  {building.name} · Daire {row.unit.unitNumber}
+                                  <ArrowUpRight className="h-4 w-4" />
+                                </button>
+                                <p className="mt-2 text-[13px] text-white/62">
+                                  {row.resident?.fullName ?? 'Sakin atanmamış'}
+                                </p>
+                              </div>
+                              <span className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/54">
+                                Kat {row.unit.floor}
+                              </span>
+                            </div>
+                            <p className="mt-3 text-[12px] text-white/48">{row.resident?.phone ?? 'Telefon bilgisi yok'}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-[22px] border border-dashed border-white/10 bg-black/12 p-6 text-sm text-white/54">
+                    Görüntülenecek daire kaydı bulunmuyor.
+                  </div>
+                )}
+              </div>
+            </section>
+          </>
+        ) : null}
+
         {managementView === 'unit-detail' ? (
           selectedManagedUnitRow ? (
             <>
@@ -1478,7 +1618,7 @@ export function ResidentConsole() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setManagementView('invoices')}
+                    onClick={() => setManagementView(unitDetailBackView)}
                     className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/60"
                   >
                     Geri
@@ -1687,8 +1827,32 @@ export function ResidentConsole() {
                 >
                   {mode === 'dark' ? <SunMedium className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
                 </button>
-                <div className="min-w-0 text-right">
-                  <p className="truncate text-[12px] font-medium text-white/78">{user.fullName}</p>
+                <div className="relative min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setProfileMenuOpen((current) => !current)}
+                    className="resident-card inline-flex max-w-[160px] items-center gap-2 rounded-[14px] px-3 py-2 text-[12px] font-medium text-white/78 transition-transform active:scale-95"
+                  >
+                    <span className="truncate">{user.fullName}</span>
+                    <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${profileMenuOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {profileMenuOpen ? (
+                    <div className="absolute right-0 top-[calc(100%+8px)] z-20 min-w-[156px] rounded-[16px] border border-white/10 bg-[#111317] p-2 shadow-[0_16px_36px_rgba(0,0,0,0.3)]">
+                      {user.unitCode ? (
+                        <div className="rounded-[12px] border border-white/8 px-3 py-2 text-[11px] text-white/62">
+                          Daire ID: {user.unitCode}
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => void handleLogout()}
+                        className="mt-2 flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left text-[12px] font-semibold text-white/78 transition hover:bg-white/6"
+                      >
+                        <LogOut className="h-4 w-4 text-[var(--color-accent)]" />
+                        Çıkış yap
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </header>

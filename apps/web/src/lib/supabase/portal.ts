@@ -26,6 +26,7 @@ import type {
   Site,
   Unit
 } from '@/lib/portal-types';
+import { buildUnitCodeMap } from '@/lib/unit-code';
 
 type ProfileRow = {
   id: string;
@@ -63,6 +64,7 @@ type BuildingRow = {
 type UnitRow = {
   id: string;
   building_id: string;
+  unit_code?: string | null;
   unit_number: string;
   floor: number;
   created_at?: string;
@@ -183,8 +185,10 @@ type AccessPassRow = {
   unit_id: string;
   holder_name: string;
   type: AccessPass['type'];
+  access_code: string;
   status: AccessPass['status'];
   expires_at: string;
+  created_at?: string;
 };
 
 type NotificationRow = {
@@ -222,6 +226,30 @@ type SiteRow = {
   city: string;
   created_at?: string;
 };
+
+function isMissingUnitCodeColumnError(error: { code?: string; message: string } | null) {
+  return error?.code === '42703' && error.message.includes('unit_code');
+}
+
+async function fetchUnitsWithFallback(client: SupabaseClient) {
+  const query = client
+    .from('units')
+    .select('id, building_id, unit_code, unit_number, floor, created_at')
+    .order('floor')
+    .order('unit_number');
+
+  const response = await query;
+
+  if (!isMissingUnitCodeColumnError(response.error)) {
+    return response;
+  }
+
+  return client
+    .from('units')
+    .select('id, building_id, unit_number, floor, created_at')
+    .order('floor')
+    .order('unit_number');
+}
 
 function requireRows<T>(error: { message: string } | null, rows: T[] | null, fallbackMessage: string) {
   if (error) {
@@ -286,10 +314,30 @@ function mapBuildings(rows: BuildingRow[]): Building[] {
   }));
 }
 
-function mapUnits(rows: UnitRow[]): Unit[] {
+function mapUnits(rows: UnitRow[], buildings: Building[], sites: Site[]): Unit[] {
+  const unitCodeMap = buildUnitCodeMap(
+    rows.map((row) => ({
+      id: row.id,
+      buildingId: row.building_id,
+      unitNumber: row.unit_number
+    })),
+    buildings.map((building) => ({
+      id: building.id,
+      siteId: building.siteId,
+      name: building.name
+    })),
+    sites.map((site) => ({
+      id: site.id,
+      name: site.name,
+      district: site.district,
+      city: site.city
+    }))
+  );
+
   return rows.map((row) => ({
     id: row.id,
     buildingId: row.building_id,
+    unitCode: row.unit_code ?? unitCodeMap.get(row.id) ?? row.id,
     unitNumber: row.unit_number,
     floor: row.floor,
     createdAt: row.created_at ?? new Date(0).toISOString()
@@ -460,8 +508,10 @@ function mapAccessPasses(rows: AccessPassRow[]): AccessPass[] {
     unitId: row.unit_id,
     holderName: row.holder_name,
     type: row.type,
+    accessCode: row.access_code,
     status: row.status,
-    expiresAt: row.expires_at
+    expiresAt: row.expires_at,
+    createdAt: row.created_at ?? new Date(0).toISOString()
   }));
 }
 
@@ -535,6 +585,7 @@ export async function buildPortalSessionUser(client: SupabaseClient, authUserId:
 
   let siteIds: string[] = [];
   let buildingIds: string[] = [];
+  let unitCode: string | undefined;
 
   if (profile.role === 'super_admin') {
     const [{ data: siteRows, error: siteError }, { data: buildingRows, error: buildingError }] = await Promise.all([
@@ -574,6 +625,21 @@ export async function buildPortalSessionUser(client: SupabaseClient, authUserId:
         'Site binaları alınamadı.'
       ).map((row) => row.id);
     }
+
+    if (profile.unit_id) {
+      const { data: unitRow, error: unitError } = await client
+        .from('units')
+        .select('id')
+        .eq('id', profile.unit_id)
+        .maybeSingle();
+
+      requireRow<{ id: string }>(
+        unitError,
+        unitRow as { id: string } | null,
+        'Yönetici daire bilgisi alınamadı.'
+      );
+      unitCode = profile.login_id;
+    }
   }
 
   if (profile.role === 'consultant') {
@@ -585,7 +651,7 @@ export async function buildPortalSessionUser(client: SupabaseClient, authUserId:
     siteIds = requireRows(
       siteAssignmentError,
       siteAssignments as SiteAssignmentRow[] | null,
-      'Danışma atamaları alınamadı.'
+      'Danışman atamaları alınamadı.'
     ).map((row) => row.site_id);
 
     if (siteIds.length) {
@@ -611,6 +677,7 @@ export async function buildPortalSessionUser(client: SupabaseClient, authUserId:
 
     const unit = requireRow<UnitRow>(unitError, unitRow as UnitRow | null, 'Daire bilgisi alınamadı.');
     buildingIds = [unit.building_id];
+    unitCode = profile.login_id;
 
     const { data: buildingRow, error: buildingError } = await client
       .from('buildings')
@@ -652,7 +719,8 @@ export async function buildPortalSessionUser(client: SupabaseClient, authUserId:
     loginId: profile.login_id,
     siteIds,
     buildingIds,
-    unitId: profile.unit_id ?? undefined
+    unitId: profile.unit_id ?? undefined,
+    unitCode
   } satisfies PortalSessionUser;
 }
 
@@ -695,11 +763,7 @@ export async function fetchPortalState(client: SupabaseClient, user: PortalSessi
       .from('buildings')
       .select('id, site_id, name, address, api_key, door_label, kiosk_code, created_at')
       .order('name'),
-    client
-      .from('units')
-      .select('id, building_id, unit_number, floor, created_at')
-      .order('floor')
-      .order('unit_number'),
+    fetchUnitsWithFallback(client),
     client
       .from('profiles')
       .select('id, unit_id, primary_building_id, full_name, role, phone, title, login_id, created_at')
@@ -755,7 +819,7 @@ export async function fetchPortalState(client: SupabaseClient, user: PortalSessi
       .order('full_name'),
     client
       .from('access_passes')
-      .select('id, unit_id, holder_name, type, status, expires_at')
+      .select('id, unit_id, holder_name, type, access_code, status, expires_at, created_at')
       .order('expires_at', { ascending: false }),
     client
       .from('notifications')
@@ -772,12 +836,22 @@ export async function fetchPortalState(client: SupabaseClient, user: PortalSessi
       .order('created_at', { ascending: false })
   ]);
 
+  const sites = mapSites(
+    requireRows(sitesResponse.error, sitesResponse.data as SiteRow[] | null, 'Site listesi alınamadı.')
+  );
+  const buildings = mapBuildings(
+    requireRows(buildingsResponse.error, buildingsResponse.data as BuildingRow[] | null, 'Bina listesi alınamadı.')
+  );
+  const units = mapUnits(
+    requireRows(unitsResponse.error, unitsResponse.data as UnitRow[] | null, 'Daire listesi alınamadı.'),
+    buildings,
+    sites
+  );
+
   return {
-    sites: mapSites(requireRows(sitesResponse.error, sitesResponse.data as SiteRow[] | null, 'Site listesi alınamadı.')),
-    buildings: mapBuildings(
-      requireRows(buildingsResponse.error, buildingsResponse.data as BuildingRow[] | null, 'Bina listesi alınamadı.')
-    ),
-    units: mapUnits(requireRows(unitsResponse.error, unitsResponse.data as UnitRow[] | null, 'Daire listesi alınamadı.')),
+    sites,
+    buildings,
+    units,
     profiles: mapProfiles(
       requireRows(profilesResponse.error, profilesResponse.data as ProfileRow[] | null, 'Profil listesi alınamadı.')
     ),

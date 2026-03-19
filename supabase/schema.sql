@@ -6,7 +6,7 @@ do $$ begin create type guest_request_status as enum ('pending', 'approved', 're
 do $$ begin create type invoice_status as enum ('paid', 'unpaid', 'overdue'); exception when duplicate_object then null; end $$;
 do $$ begin create type package_status as enum ('at_desk', 'on_the_way', 'delivered'); exception when duplicate_object then null; end $$;
 do $$ begin create type provider_category as enum ('Temizlik', 'Elektrik', 'Tesisat', 'Asansör', 'Nakliyat', 'Peyzaj'); exception when duplicate_object then null; end $$;
-do $$ begin create type access_pass_type as enum ('qr', 'nfc'); exception when duplicate_object then null; end $$;
+do $$ begin create type access_pass_type as enum ('qr'); exception when duplicate_object then null; end $$;
 do $$ begin create type access_pass_status as enum ('active', 'used', 'expired'); exception when duplicate_object then null; end $$;
 do $$ begin create type notification_tone as enum ('info', 'success', 'warning', 'danger'); exception when duplicate_object then null; end $$;
 do $$ begin create type emergency_status as enum ('open', 'closed'); exception when duplicate_object then null; end $$;
@@ -34,11 +34,92 @@ create table if not exists public.buildings (
 create table if not exists public.units (
   id uuid primary key default gen_random_uuid(),
   building_id uuid not null references public.buildings(id) on delete cascade,
+  unit_code text not null,
   unit_number text not null,
   floor integer not null,
   created_at timestamptz not null default now(),
+  unique (unit_code),
   unique (building_id, unit_number)
 );
+
+alter table public.units
+  add column if not exists unit_code text;
+
+create or replace function public.code_fragment(value text, fragment_length integer, fallback text)
+returns text
+language sql
+immutable
+as $$
+  select coalesce(
+    nullif(
+      left(
+        regexp_replace(
+          translate(upper(coalesce(value, '')), 'ÇĞİIÖŞÜ', 'CGIIOSU'),
+          '[^A-Z0-9]+',
+          '',
+          'g'
+        ),
+        greatest(fragment_length, 1)
+      ),
+      ''
+    ),
+    fallback
+  );
+$$;
+
+with base_codes as (
+  select
+    units.id,
+    public.code_fragment(sites.city, 3, 'CTY')
+    || '-' ||
+    public.code_fragment(sites.district, 3, 'DST')
+    || '-' ||
+    public.code_fragment(sites.name, 4, 'SITE')
+    || '-' ||
+    public.code_fragment(buildings.name, 3, 'BLK')
+    || '-' ||
+    case
+      when regexp_replace(units.unit_number, '[^0-9]+', '', 'g') <> '' then
+        lpad(right(regexp_replace(units.unit_number, '[^0-9]+', '', 'g'), 3), 3, '0')
+      else public.code_fragment(units.unit_number, 3, '001')
+    end as base_code
+  from public.units
+  join public.buildings on buildings.id = units.building_id
+  join public.sites on sites.id = buildings.site_id
+),
+numbered_codes as (
+  select
+    id,
+    case
+      when row_number() over (partition by base_code order by id) = 1 then base_code
+      else base_code || '-' || row_number() over (partition by base_code order by id)
+    end as generated_code
+  from base_codes
+)
+update public.units
+set unit_code = numbered_codes.generated_code
+from numbered_codes
+where public.units.id = numbered_codes.id
+  and (
+    public.units.unit_code is null
+    or public.units.unit_code = ''
+  );
+
+alter table public.units
+  alter column unit_code set not null;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'units_unit_code_key'
+      and conrelid = 'public.units'::regclass
+  ) then
+    alter table public.units
+      add constraint units_unit_code_key unique (unit_code);
+  end if;
+end $$;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -51,6 +132,13 @@ create table if not exists public.profiles (
   login_id text not null unique,
   created_at timestamptz not null default now()
 );
+
+update public.profiles
+set login_id = units.unit_code
+from public.units
+where public.profiles.unit_id = units.id
+  and public.profiles.role in ('resident', 'manager')
+  and public.profiles.login_id is distinct from units.unit_code;
 
 create table if not exists public.resident_preferences (
   profile_id uuid primary key references public.profiles(id) on delete cascade,
@@ -190,10 +278,71 @@ create table if not exists public.access_passes (
   unit_id uuid not null references public.units(id) on delete cascade,
   holder_name text not null,
   type access_pass_type not null,
+  access_code text not null,
   status access_pass_status not null default 'active',
   expires_at timestamptz not null,
   created_at timestamptz not null default now()
 );
+
+alter table public.access_passes
+  add column if not exists access_code text;
+
+update public.access_passes
+set type = 'qr'
+where type::text <> 'qr';
+
+update public.access_passes
+set access_code = upper(access_code)
+where access_code is not null
+  and access_code <> upper(access_code);
+
+with numbered_passes as (
+  select
+    id,
+    substring(upper(replace(gen_random_uuid()::text, '-', '')) from 1 for 6) as generated_code
+  from public.access_passes
+  where access_code is null
+     or access_code !~ '^[A-Z0-9]{6}$'
+)
+update public.access_passes
+set access_code = numbered_passes.generated_code
+from numbered_passes
+where public.access_passes.id = numbered_passes.id;
+
+alter table public.access_passes
+  alter column access_code set not null;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'access_passes_access_code_key'
+      and conrelid = 'public.access_passes'::regclass
+  ) then
+    alter table public.access_passes
+      add constraint access_passes_access_code_key unique (access_code);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'access_passes_qr_only_check'
+      and conrelid = 'public.access_passes'::regclass
+  ) then
+    alter table public.access_passes
+      add constraint access_passes_qr_only_check check (type::text = 'qr');
+  end if;
+end $$;
+
+alter table public.access_passes
+  drop constraint if exists access_passes_access_code_check;
+
+alter table public.access_passes
+  add constraint access_passes_access_code_check check (access_code ~ '^[A-Z0-9]{6}$');
 
 create table if not exists public.notifications (
   id uuid primary key default gen_random_uuid(),
@@ -758,10 +907,12 @@ for update
 using (
   public.is_super_admin()
   or public.can_manage_unit(unit_id)
+  or public.is_resident_for_unit(unit_id)
 )
 with check (
   public.is_super_admin()
   or public.can_manage_unit(unit_id)
+  or public.is_resident_for_unit(unit_id)
 );
 
 drop policy if exists "package_events_select_access" on public.package_events;

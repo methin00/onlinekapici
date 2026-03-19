@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { ProviderCategory } from '@/lib/portal-types';
+import { buildUnitCodeMap } from '@/lib/unit-code';
 import { getSupabaseAdminClient } from '@/lib/supabase/admin';
 
 class HttpError extends Error {
@@ -50,6 +51,62 @@ function readProviderCategory(value: unknown) {
   }
 
   return value as ProviderCategory;
+}
+
+const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function createRandomSecret(length: number) {
+  return Array.from({ length }, () => {
+    const index = Math.floor(Math.random() * PASSWORD_ALPHABET.length);
+    return PASSWORD_ALPHABET[index];
+  }).join('');
+}
+
+function normalizePhone(value: string) {
+  return value.replace(/\D/g, '');
+}
+
+function normalizeCodeFragment(value: string) {
+  return value
+    .toLocaleUpperCase('tr-TR')
+    .replaceAll('Ç', 'C')
+    .replaceAll('Ğ', 'G')
+    .replaceAll('İ', 'I')
+    .replaceAll('Ö', 'O')
+    .replaceAll('Ş', 'S')
+    .replaceAll('Ü', 'U')
+    .replace(/[^A-Z0-9]+/g, '');
+}
+
+function codeFragment(value: string, length: number, fallback: string) {
+  const normalized = normalizeCodeFragment(value).slice(0, length);
+  return normalized || fallback;
+}
+
+function unitNumberCode(value: string) {
+  const digits = value.replace(/\D/g, '');
+
+  if (digits) {
+    return digits.slice(-3).padStart(3, '0');
+  }
+
+  return codeFragment(value, 3, '001');
+}
+
+function buildBaseUnitCode(parts: {
+  city: string;
+  district: string;
+  siteName: string;
+  buildingName: string;
+  unitNumber: string;
+}) {
+  return [
+    codeFragment(parts.city, 3, 'CTY'),
+    codeFragment(parts.district, 3, 'DST'),
+    codeFragment(parts.siteName, 4, 'SITE'),
+    codeFragment(parts.buildingName, 3, 'BLK'),
+    unitNumberCode(parts.unitNumber)
+  ].join('-');
 }
 
 type ActorProfile = {
@@ -103,6 +160,10 @@ async function ensureSuccess(error: { message: string } | null, fallbackMessage:
   if (error) {
     throw new HttpError(error.message || fallbackMessage, 400);
   }
+}
+
+function isMissingColumnError(error: { code?: string; message: string } | null, columnName: string) {
+  return error?.code === '42703' && error.message.includes(columnName);
 }
 
 async function getAccessibleSiteIds(admin: ReturnType<typeof getSupabaseAdminClient>, actor: ActorProfile) {
@@ -421,6 +482,246 @@ async function clearFormerManagerRoles(admin: ReturnType<typeof getSupabaseAdmin
   }
 }
 
+async function ensureUniqueUnitCode(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  baseCode: string,
+  unitId: string
+) {
+  let candidate = baseCode;
+  let suffix = 2;
+
+  while (true) {
+    const { data, error } = await admin
+      .from('units')
+      .select('id')
+      .eq('unit_code', candidate)
+      .neq('id', unitId)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(error.message || 'Daire kimliği benzersizliği doğrulanamadı.', 400);
+    }
+
+    if (!data) {
+      return candidate;
+    }
+
+    candidate = `${baseCode}-${suffix}`;
+    suffix += 1;
+  }
+}
+
+async function syncUnitProfileLoginIds(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  unitId: string,
+  unitCode: string
+) {
+  const { error } = await admin
+    .from('profiles')
+    .update({ login_id: unitCode })
+    .eq('unit_id', unitId)
+    .in('role', ['resident', 'manager']);
+
+  if (error) {
+    throw new HttpError(error.message || 'Daire giriş kimliği profillere işlenemedi.', 400);
+  }
+}
+
+async function refreshUnitCode(admin: ReturnType<typeof getSupabaseAdminClient>, unitId: string) {
+  const { data: unit, error: unitError } = await admin
+    .from('units')
+    .select('id, unit_number, building_id')
+    .eq('id', unitId)
+    .maybeSingle();
+
+  if (unitError || !unit) {
+    throw new HttpError('Daire kaydı bulunamadı.', 404);
+  }
+
+  const { data: building, error: buildingError } = await admin
+    .from('buildings')
+    .select('id, name, site_id')
+    .eq('id', unit.building_id)
+    .maybeSingle();
+
+  if (buildingError || !building) {
+    throw new HttpError('Blok kaydı bulunamadı.', 404);
+  }
+
+  const { data: site, error: siteError } = await admin
+    .from('sites')
+    .select('id, name, district, city')
+    .eq('id', building.site_id)
+    .maybeSingle();
+
+  if (siteError || !site) {
+    throw new HttpError('Site kaydı bulunamadı.', 404);
+  }
+
+  const { data: siteBuildings, error: siteBuildingsError } = await admin
+    .from('buildings')
+    .select('id, site_id, name')
+    .eq('site_id', site.id);
+
+  if (siteBuildingsError) {
+    throw new HttpError(siteBuildingsError.message || 'Site blokları alınamadı.', 400);
+  }
+
+  const siteBuildingIds = (siteBuildings ?? []).map((entry) => entry.id);
+
+  const { data: siteUnits, error: siteUnitsError } = await admin
+    .from('units')
+    .select('id, building_id, unit_number')
+    .in('building_id', siteBuildingIds);
+
+  if (siteUnitsError) {
+    throw new HttpError(siteUnitsError.message || 'Site daireleri alınamadı.', 400);
+  }
+
+  const nextUnitCode =
+    buildUnitCodeMap(
+      (siteUnits ?? []).map((entry) => ({
+        id: entry.id,
+        buildingId: entry.building_id,
+        unitNumber: entry.unit_number
+      })),
+      (siteBuildings ?? []).map((entry) => ({
+        id: entry.id,
+        siteId: entry.site_id,
+        name: entry.name
+      })),
+      [
+        {
+          id: site.id,
+          name: site.name,
+          district: site.district,
+          city: site.city
+        }
+      ]
+    ).get(unit.id) ??
+    buildBaseUnitCode({
+      city: site.city,
+      district: site.district,
+      siteName: site.name,
+      buildingName: building.name,
+      unitNumber: unit.unit_number
+    });
+
+  const { error: updateError } = await admin
+    .from('units')
+    .update({ unit_code: nextUnitCode })
+    .eq('id', unit.id);
+
+  if (updateError && !isMissingColumnError(updateError, 'unit_code')) {
+    throw new HttpError(updateError.message || 'Daire kimliği güncellenemedi.', 400);
+  }
+
+  await syncUnitProfileLoginIds(admin, unit.id, nextUnitCode);
+  return nextUnitCode;
+}
+
+async function getUnitAuthContext(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  unitId: string
+) {
+  const { data: unitWithCode, error: unitWithCodeError } = await admin
+    .from('units')
+    .select('id, building_id, unit_code')
+    .eq('id', unitId)
+    .maybeSingle();
+
+  if (!unitWithCodeError && unitWithCode) {
+    return {
+      id: unitWithCode.id,
+      buildingId: unitWithCode.building_id,
+      unitCode: unitWithCode.unit_code ?? (await refreshUnitCode(admin, unitWithCode.id))
+    };
+  }
+
+  if (unitWithCodeError && !isMissingColumnError(unitWithCodeError, 'unit_code')) {
+    throw new HttpError(unitWithCodeError.message || 'Seçilen daire bulunamadı.', 404);
+  }
+
+  const { data: unit, error: unitError } = await admin
+    .from('units')
+    .select('id, building_id')
+    .eq('id', unitId)
+    .maybeSingle();
+
+  if (unitError || !unit) {
+    throw new HttpError(unitError?.message || 'Seçilen daire bulunamadı.', 404);
+  }
+
+  return {
+    id: unit.id,
+    buildingId: unit.building_id,
+    unitCode: await refreshUnitCode(admin, unit.id)
+  };
+}
+
+async function refreshBuildingUnitCodes(admin: ReturnType<typeof getSupabaseAdminClient>, buildingId: string) {
+  const { data: units, error } = await admin.from('units').select('id').eq('building_id', buildingId);
+
+  if (error) {
+    throw new HttpError(error.message || 'Bloktaki daireler alınamadı.', 400);
+  }
+
+  for (const unit of units ?? []) {
+    await refreshUnitCode(admin, unit.id);
+  }
+}
+
+async function refreshSiteUnitCodes(admin: ReturnType<typeof getSupabaseAdminClient>, siteId: string) {
+  const { data: buildings, error } = await admin.from('buildings').select('id').eq('site_id', siteId);
+
+  if (error) {
+    throw new HttpError(error.message || 'Sitedeki bloklar alınamadı.', 400);
+  }
+
+  for (const building of buildings ?? []) {
+    await refreshBuildingUnitCodes(admin, building.id);
+  }
+}
+
+function buildResidentAuthEmail(unitCode: string) {
+  return `resident-${unitCode.toLowerCase()}@auth.onlinekapici.com`;
+}
+
+function buildConsultantAuthEmail(phone: string) {
+  return `consultant-${normalizePhone(phone)}@auth.onlinekapici.com`;
+}
+
+function createBuildingApiKey() {
+  return crypto.randomUUID().replaceAll('-', '');
+}
+
+function createKioskCodeBase(name: string) {
+  const fragment = normalizeCodeFragment(name).slice(0, 6).toLowerCase();
+  return fragment || 'kiosk';
+}
+
+async function createUniqueKioskCode(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  buildingName: string
+) {
+  while (true) {
+    const candidate = `${createKioskCodeBase(buildingName)}-${createRandomSecret(6).toLowerCase()}`;
+    const { data, error } = await admin
+      .from('buildings')
+      .select('id')
+      .eq('kiosk_code', candidate)
+      .maybeSingle();
+
+    if (error) {
+      throw new HttpError(error.message || 'Terminal kodu üretilemedi.', 400);
+    }
+
+    if (!data) {
+      return candidate;
+    }
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { admin, actor } = await requireActor(request);
@@ -433,6 +734,7 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = body.payload ?? {};
+    const responsePayload: Record<string, unknown> = {};
 
     switch (body.action) {
       case 'createSite': {
@@ -442,14 +744,42 @@ export async function POST(request: NextRequest) {
         const district = readTrimmedString(payload.district, 'İlçe', 2);
         const city = readTrimmedString(payload.city, 'Şehir', 2);
 
-        const { error } = await admin.from('sites').insert({
-          name,
-          address,
-          district,
-          city
-        });
+        const { data, error } = await admin
+          .from('sites')
+          .insert({
+            name,
+            address,
+            district,
+            city
+          })
+          .select('id')
+          .single();
 
         await ensureSuccess(error, 'Site oluşturulamadı.');
+        responsePayload.siteId = data?.id ?? null;
+        break;
+      }
+
+      case 'updateSite': {
+        ensureSuperAdmin(actor);
+        const siteId = readTrimmedString(payload.siteId, 'Site');
+        const name = readTrimmedString(payload.name, 'Site adı', 2);
+        const address = readTrimmedString(payload.address, 'Adres', 6);
+        const district = readTrimmedString(payload.district, 'İlçe', 2);
+        const city = readTrimmedString(payload.city, 'Şehir', 2);
+
+        const { error } = await admin
+          .from('sites')
+          .update({
+            name,
+            address,
+            district,
+            city
+          })
+          .eq('id', siteId);
+
+        await ensureSuccess(error, 'Site güncellenemedi.');
+        await refreshSiteUnitCodes(admin, siteId);
         break;
       }
 
@@ -466,20 +796,56 @@ export async function POST(request: NextRequest) {
         const siteId = readTrimmedString(payload.siteId, 'Site');
         const name = readTrimmedString(payload.name, 'Blok adı', 1);
         const address = readTrimmedString(payload.address, 'Blok adresi', 4);
+        const doorLabel = readTrimmedString(payload.doorLabel, 'Kapı etiketi', 1);
+        const apiKey =
+          typeof payload.apiKey === 'string' && payload.apiKey.trim().length >= 4
+            ? payload.apiKey.trim()
+            : createBuildingApiKey();
+        const kioskCode =
+          typeof payload.kioskCode === 'string' && payload.kioskCode.trim().length >= 2
+            ? payload.kioskCode.trim()
+            : await createUniqueKioskCode(admin, name);
+
+        const { data, error } = await admin
+          .from('buildings')
+          .insert({
+            site_id: siteId,
+            name,
+            address,
+            api_key: apiKey,
+            door_label: doorLabel,
+            kiosk_code: kioskCode
+          })
+          .select('id')
+          .single();
+
+        await ensureSuccess(error, 'Blok oluşturulamadı.');
+        responsePayload.buildingId = data?.id ?? null;
+        break;
+      }
+
+      case 'updateBuilding': {
+        ensureSuperAdmin(actor);
+        const buildingId = readTrimmedString(payload.buildingId, 'Blok');
+        const name = readTrimmedString(payload.name, 'Blok adı', 1);
+        const address = readTrimmedString(payload.address, 'Blok adresi', 4);
         const apiKey = readTrimmedString(payload.apiKey, 'API anahtarı', 4);
         const doorLabel = readTrimmedString(payload.doorLabel, 'Kapı etiketi', 1);
         const kioskCode = readTrimmedString(payload.kioskCode, 'Terminal kodu', 2);
 
-        const { error } = await admin.from('buildings').insert({
-          site_id: siteId,
-          name,
-          address,
-          api_key: apiKey,
-          door_label: doorLabel,
-          kiosk_code: kioskCode
-        });
+        const { error } = await admin
+          .from('buildings')
+          .update({
+            name,
+            address,
+            api_key: apiKey,
+            door_label: doorLabel,
+            kiosk_code: kioskCode
+          })
+          .eq('id', buildingId);
 
-        await ensureSuccess(error, 'Blok oluşturulamadı.');
+        await ensureSuccess(error, 'Blok güncellenemedi.');
+        await refreshBuildingUnitCodes(admin, buildingId);
         break;
       }
 
@@ -496,23 +862,50 @@ export async function POST(request: NextRequest) {
         const buildingId = readTrimmedString(payload.buildingId, 'Blok');
         const unitNumber = readTrimmedString(payload.unitNumber, 'Daire numarası', 1);
         const floor = readNumber(payload.floor, 'Kat');
+        let createdUnit: { id: string } | null = null;
 
-        const { error } = await admin.from('units').insert({
-          building_id: buildingId,
-          unit_number: unitNumber,
-          floor
-        });
+        const { data: createdUnitWithCode, error: createWithCodeError } = await admin
+          .from('units')
+          .insert({
+            building_id: buildingId,
+            unit_number: unitNumber,
+            floor,
+            unit_code: `TEMP-${Date.now()}`
+          })
+          .select('id')
+          .single();
 
-        await ensureSuccess(error, 'Daire oluşturulamadı.');
+        if (createWithCodeError && isMissingColumnError(createWithCodeError, 'unit_code')) {
+          const { data: createdUnitWithoutCode, error: createWithoutCodeError } = await admin
+            .from('units')
+            .insert({
+              building_id: buildingId,
+              unit_number: unitNumber,
+              floor
+            })
+            .select('id')
+            .single();
+
+          await ensureSuccess(createWithoutCodeError, 'Daire oluşturulamadı.');
+          createdUnit = createdUnitWithoutCode;
+        } else {
+          await ensureSuccess(createWithCodeError, 'Daire oluşturulamadı.');
+          createdUnit = createdUnitWithCode;
+        }
+
+        if (!createdUnit?.id) {
+          throw new HttpError('Daire kaydı tamamlanamadı.', 400);
+        }
+
+        responsePayload.unitId = createdUnit.id;
+        responsePayload.unitCode = await refreshUnitCode(admin, createdUnit.id);
         break;
       }
-
       case 'updateUnit': {
         ensureSuperAdmin(actor);
         const unitId = readTrimmedString(payload.unitId, 'Daire');
         const unitNumber = readTrimmedString(payload.unitNumber, 'Daire numarası', 1);
         const floor = readNumber(payload.floor, 'Kat');
-
         const { error } = await admin
           .from('units')
           .update({
@@ -520,8 +913,8 @@ export async function POST(request: NextRequest) {
             floor
           })
           .eq('id', unitId);
-
         await ensureSuccess(error, 'Daire güncellenemedi.');
+        responsePayload.unitCode = await refreshUnitCode(admin, unitId);
         break;
       }
 
@@ -535,56 +928,119 @@ export async function POST(request: NextRequest) {
 
       case 'createResident': {
         ensureSuperAdmin(actor);
-        const email = readTrimmedString(payload.email, 'E-posta', 6).toLocaleLowerCase('tr-TR');
-        const password = readTrimmedString(payload.password, 'Şifre', 6);
         const fullName = readTrimmedString(payload.fullName, 'Ad soyad', 3);
         const phone = readTrimmedString(payload.phone, 'Telefon', 6);
-        const title = readTrimmedString(payload.title, 'Unvan', 2);
-        const loginId = readTrimmedString(payload.loginId, 'Giriş kimliği', 3);
+        const title = typeof payload.title === 'string' && payload.title.trim().length >= 2
+          ? payload.title.trim()
+          : 'Daire Sakini';
         const unitId = readTrimmedString(payload.unitId, 'Daire');
-
-        const { data: unit, error: unitError } = await admin
-          .from('units')
-          .select('id, building_id')
-          .eq('id', unitId)
-          .maybeSingle();
-
-        if (unitError || !unit) {
-          throw new HttpError('Seçilen daire bulunamadı.', 404);
+        const unit = await getUnitAuthContext(admin, unitId);
+        const { count: existingCount, error: existingError } = await admin
+          .from('profiles')
+          .select('id', { count: 'exact', head: true })
+          .eq('unit_id', unitId)
+          .in('role', ['resident', 'manager']);
+        if (existingError) {
+          throw new HttpError(existingError.message || 'Daire hesabı kontrol edilemedi.', 400);
         }
-
+        if ((existingCount ?? 0) > 0) {
+          throw new HttpError('Bu daire için zaten bir hesap bulunuyor.', 400);
+        }
+        const generatedPassword = createRandomSecret(8);
+        const authEmail = buildResidentAuthEmail(unit.unitCode);
         const { data: authData, error: authError } = await admin.auth.admin.createUser({
-          email,
-          password,
+          email: authEmail,
+          password: generatedPassword,
           email_confirm: true,
           user_metadata: {
             full_name: fullName
           }
         });
-
         if (authError || !authData.user) {
-          throw new HttpError(authError?.message || 'Sakin hesabı oluşturulamadı.', 400);
+          throw new HttpError(authError?.message || 'Daire hesabı oluşturulamadı.', 400);
         }
-
         const { error: profileError } = await admin.from('profiles').insert({
           id: authData.user.id,
           unit_id: unitId,
-          primary_building_id: unit.building_id,
+          primary_building_id: unit.buildingId,
           full_name: fullName,
           role: 'resident',
           phone,
           title,
-          login_id: loginId
+          login_id: unit.unitCode
         });
-
         if (profileError) {
           await admin.auth.admin.deleteUser(authData.user.id);
           throw new HttpError(profileError.message || 'Sakin profil kaydı oluşturulamadı.', 400);
         }
+        responsePayload.credentials = {
+          fullName,
+          identifier: unit.unitCode,
+          password: generatedPassword,
+          role: 'resident'
+        };
+        break;
+      }
+      case 'updateResident': {
+        ensureSuperAdmin(actor);
+        const profileId = readTrimmedString(payload.profileId, 'Sakin');
+        const fullName = readTrimmedString(payload.fullName, 'Ad soyad', 3);
+        const phone = readTrimmedString(payload.phone, 'Telefon', 6);
+        const title =
+          typeof payload.title === 'string' && payload.title.trim().length >= 2
+            ? payload.title.trim()
+            : 'Daire Sakini';
+
+        const { data: profile, error: profileError } = await admin
+          .from('profiles')
+          .select('id, role')
+          .eq('id', profileId)
+          .maybeSingle();
+
+        if (profileError || !profile || !['resident', 'manager'].includes(profile.role)) {
+          throw new HttpError('Seçilen kullanıcı daire sakini değil.', 400);
+        }
+
+        const { error } = await admin
+          .from('profiles')
+          .update({
+            full_name: fullName,
+            phone,
+            title
+          })
+          .eq('id', profileId);
+
+        await ensureSuccess(error, 'Sakin bilgileri güncellenemedi.');
+        break;
+      }
+      case 'deleteResident': {
+        ensureSuperAdmin(actor);
+        const profileId = readTrimmedString(payload.profileId, 'Sakin');
+
+        const { data: profile, error: profileError } = await admin
+          .from('profiles')
+          .select('id, role')
+          .eq('id', profileId)
+          .maybeSingle();
+
+        if (profileError || !profile || !['resident', 'manager'].includes(profile.role)) {
+          throw new HttpError('Seçilen kullanıcı daire sakini değil.', 400);
+        }
+
+        const { error: managerAssignmentError } = await admin
+          .from('manager_site_assignments')
+          .delete()
+          .eq('profile_id', profileId);
+
+        await ensureSuccess(managerAssignmentError, 'Yönetici ataması temizlenemedi.');
+
+        const { error: authDeleteError } = await admin.auth.admin.deleteUser(profileId);
+        if (authDeleteError) {
+          throw new HttpError(authDeleteError.message || 'Sakin hesabı silinemedi.', 400);
+        }
 
         break;
       }
-
       case 'assignSiteManager': {
         ensureSuperAdmin(actor);
         const siteId = readTrimmedString(payload.siteId, 'Site');
@@ -637,6 +1093,60 @@ export async function POST(request: NextRequest) {
         break;
       }
 
+      case 'createConsultant': {
+        ensureSuperAdmin(actor);
+        const fullName = readTrimmedString(payload.fullName, 'Ad soyad', 3);
+        const phone = readTrimmedString(payload.phone, 'Telefon', 6);
+        const normalizedPhone = normalizePhone(phone);
+        if (normalizedPhone.length < 10) {
+          throw new HttpError('Telefon bilgisi geçerli görünmüyor.', 400);
+        }
+        const { count: existingConsultantCount, error: existingConsultantError } = await admin
+          .from('profiles')
+          .select('id', { count: 'exact', head: true })
+          .eq('role', 'consultant')
+          .eq('login_id', normalizedPhone);
+        if (existingConsultantError) {
+          throw new HttpError(existingConsultantError.message || 'Danışman kaydı kontrol edilemedi.', 400);
+        }
+        if ((existingConsultantCount ?? 0) > 0) {
+          throw new HttpError('Bu telefon numarasıyla kayıtlı bir danışman zaten var.', 400);
+        }
+        const generatedPassword = createRandomSecret(8);
+        const authEmail = buildConsultantAuthEmail(phone);
+        const { data: authData, error: authError } = await admin.auth.admin.createUser({
+          email: authEmail,
+          password: generatedPassword,
+          email_confirm: true,
+          user_metadata: {
+            full_name: fullName
+          }
+        });
+        if (authError || !authData.user) {
+          throw new HttpError(authError?.message || 'Danışman hesabı oluşturulamadı.', 400);
+        }
+        const { error: profileError } = await admin.from('profiles').insert({
+          id: authData.user.id,
+          unit_id: null,
+          primary_building_id: null,
+          full_name: fullName,
+          role: 'consultant',
+          phone,
+          title: 'Danışman',
+          login_id: normalizedPhone
+        });
+        if (profileError) {
+          await admin.auth.admin.deleteUser(authData.user.id);
+          throw new HttpError(profileError.message || 'Danışman profil kaydı oluşturulamadı.', 400);
+        }
+        responsePayload.credentials = {
+          fullName,
+          identifier: phone,
+          password: generatedPassword,
+          role: 'consultant'
+        };
+        break;
+      }
       case 'setConsultantAssignment': {
         ensureSuperAdmin(actor);
         const siteId = readTrimmedString(payload.siteId, 'Site');
@@ -734,7 +1244,7 @@ export async function POST(request: NextRequest) {
           const message = existingPlanError.message.toLocaleLowerCase('tr-TR');
 
           if (!message.includes('does not exist') && !message.includes('relation') && !message.includes('column')) {
-            throw new HttpError(existingPlanError.message || 'Aidat planÄ± kontrol edilemedi.', 400);
+            throw new HttpError(existingPlanError.message || 'Aidat planı kontrol edilemedi.', 400);
           }
         }
 
@@ -778,7 +1288,7 @@ export async function POST(request: NextRequest) {
         throw new HttpError('Yönetim işlemi desteklenmiyor.', 400);
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, ...responsePayload });
   } catch (error) {
     if (error instanceof HttpError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
@@ -790,3 +1300,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+

@@ -10,6 +10,10 @@ function hoursAgo(hours: number) {
   return new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
 }
 
+function hoursAfter(hours: number) {
+  return new Date(now.getTime() + hours * 60 * 60 * 1000).toISOString();
+}
+
 function daysAgo(days: number) {
   return new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
 }
@@ -65,46 +69,47 @@ export const portalSeedState: PortalState = {
     }
   ],
   units: [
-    { id: 'unit-a-12', buildingId: 'building-atlas-a', unitNumber: '12', floor: 3 },
-    { id: 'unit-a-18', buildingId: 'building-atlas-a', unitNumber: '18', floor: 4 },
-    { id: 'unit-b-05', buildingId: 'building-atlas-b', unitNumber: '5', floor: 1 },
-    { id: 'unit-b-22', buildingId: 'building-atlas-b', unitNumber: '22', floor: 6 },
-    { id: 'unit-g-09', buildingId: 'building-gunes-kuzey', unitNumber: '9', floor: 2 }
+    { id: 'unit-a-12', buildingId: 'building-atlas-a', unitCode: 'IST-UMR-ATLA-ABL-012', unitNumber: '12', floor: 3 },
+    { id: 'unit-a-18', buildingId: 'building-atlas-a', unitCode: 'IST-UMR-ATLA-ABL-018', unitNumber: '18', floor: 4 },
+    { id: 'unit-b-05', buildingId: 'building-atlas-b', unitCode: 'IST-UMR-ATLA-BBL-005', unitNumber: '5', floor: 1 },
+    { id: 'unit-b-22', buildingId: 'building-atlas-b', unitCode: 'IST-UMR-ATLA-BBL-022', unitNumber: '22', floor: 6 },
+    { id: 'unit-g-09', buildingId: 'building-gunes-kuzey', unitCode: 'BUR-NIL-GUNE-KUZ-009', unitNumber: '9', floor: 2 }
   ],
   profiles: [
     {
       id: 'profile-super',
       fullName: 'Mert Aydın',
-      email: 'merkez@onlinekapici.app',
+      email: 'admin@onlinekapici.com',
       role: 'super_admin',
       phone: '05320000001',
       title: 'Merkez Yönetim',
-      loginId: 'merkez',
-      password: '123456',
+      loginId: 'admin@onlinekapici.com',
+      password: 'onlinekapici',
       siteIds: ['site-atlas', 'site-gunes'],
       buildingIds: ['building-atlas-a', 'building-atlas-b', 'building-gunes-kuzey']
     },
     {
       id: 'profile-consultant',
       fullName: 'Ceren Korkmaz',
-      email: 'danisma@onlinekapici.app',
+      email: 'consultant-05320000002@auth.onlinekapici.local',
       role: 'consultant',
       phone: '05320000002',
       title: 'Danışma Merkezi',
-      loginId: 'danisma',
-      password: '123456',
+      loginId: '05320000002',
+      password: 'DNM823Q4',
       siteIds: ['site-atlas', 'site-gunes'],
       buildingIds: ['building-atlas-a', 'building-atlas-b', 'building-gunes-kuzey']
     },
     {
       id: 'profile-manager',
       fullName: 'Selin Demir',
-      email: 'yonetim.atlas@onlinekapici.app',
+      unitId: 'unit-a-18',
+      email: 'resident-ist-umr-atla-abl-018@auth.onlinekapici.local',
       role: 'manager',
       phone: '05320000003',
       title: 'Site Yöneticisi',
-      loginId: 'atlasyonetim',
-      password: '123456',
+      loginId: 'IST-UMR-ATLA-ABL-018',
+      password: 'BLK18A9Q',
       siteIds: ['site-atlas'],
       buildingIds: ['building-atlas-a', 'building-atlas-b']
     },
@@ -112,12 +117,12 @@ export const portalSeedState: PortalState = {
       id: 'profile-resident-ahmet',
       unitId: 'unit-a-12',
       fullName: 'Ahmet Yılmaz',
-      email: 'ahmet.yilmaz@onlinekapici.app',
+      email: 'resident-ist-umr-atla-abl-012@auth.onlinekapici.local',
       role: 'resident',
       phone: '05551234567',
       title: 'Daire Sakini',
-      loginId: '05551234567',
-      password: '123456',
+      loginId: 'IST-UMR-ATLA-ABL-012',
+      password: 'KP12LM8R',
       siteIds: ['site-atlas'],
       buildingIds: ['building-atlas-a']
     },
@@ -125,12 +130,12 @@ export const portalSeedState: PortalState = {
       id: 'profile-resident-elif',
       unitId: 'unit-b-05',
       fullName: 'Elif Aksoy',
-      email: 'elif.aksoy@onlinekapici.app',
+      email: 'resident-ist-umr-atla-bbl-005@auth.onlinekapici.local',
       role: 'resident',
       phone: '05557654321',
       title: 'Daire Sakini',
-      loginId: '05557654321',
-      password: '123456',
+      loginId: 'IST-UMR-ATLA-BBL-005',
+      password: 'EV05TR7K',
       siteIds: ['site-atlas'],
       buildingIds: ['building-atlas-b']
     },
@@ -414,16 +419,20 @@ export const portalSeedState: PortalState = {
       unitId: 'unit-a-12',
       holderName: 'Ayşe Yıldız',
       type: 'qr',
+      accessCode: 'A7K2Q9',
       status: 'active',
-      expiresAt: daysAfter(1)
+      expiresAt: hoursAfter(2),
+      createdAt: minutesAgo(15)
     },
     {
       id: 'pass-2',
       unitId: 'unit-a-12',
-      holderName: 'NFC Kart 04',
-      type: 'nfc',
+      holderName: 'Mehmet Arslan',
+      type: 'qr',
+      accessCode: 'P4M8T1',
       status: 'used',
-      expiresAt: daysAgo(1)
+      expiresAt: daysAgo(1),
+      createdAt: daysAgo(2)
     }
   ],
   notifications: [
@@ -475,11 +484,11 @@ export const portalSeedState: PortalState = {
 };
 
 export const demoCredentialMap = {
-  super_admin: { email: 'merkez@onlinekapici.app', password: '123456' },
-  consultant: { email: 'danisma@onlinekapici.app', password: '123456' },
-  manager: { email: 'yonetim.atlas@onlinekapici.app', password: '123456' },
-  resident: { email: 'ahmet.yilmaz@onlinekapici.app', password: '123456' },
-  kiosk_device: { email: 'terminal.atlas.a@onlinekapici.app', password: '123456' }
+  super_admin: { identifier: 'admin@onlinekapici.com', password: 'onlinekapici' },
+  consultant: { identifier: '05320000002', password: 'DNM823Q4' },
+  manager: { identifier: 'IST-UMR-ATLA-ABL-018', password: 'BLK18A9Q' },
+  resident: { identifier: 'IST-UMR-ATLA-ABL-012', password: 'KP12LM8R' },
+  kiosk_device: { identifier: 'atlas-a', password: '123456' }
 } as const;
 
 export function clonePortalState() {
@@ -487,6 +496,10 @@ export function clonePortalState() {
 }
 
 export function profileToSessionUser(profile: Profile): PortalSessionUser {
+  const unitCode = profile.unitId
+    ? portalSeedState.units.find((unit) => unit.id === profile.unitId)?.unitCode
+    : undefined;
+
   return {
     id: profile.id,
     fullName: profile.fullName,
@@ -496,7 +509,8 @@ export function profileToSessionUser(profile: Profile): PortalSessionUser {
     loginId: profile.loginId,
     siteIds: [...profile.siteIds],
     buildingIds: [...profile.buildingIds],
-    unitId: profile.unitId
+    unitId: profile.unitId,
+    unitCode
   };
 }
 
