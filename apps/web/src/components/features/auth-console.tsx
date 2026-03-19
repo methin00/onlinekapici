@@ -14,37 +14,31 @@ import { BrandLogo } from '../ui/brand-logo';
 const roleOptions: Array<{
   role: PortalRole;
   label: string;
-  description: string;
   icon: ReactNode;
 }> = [
   {
     role: 'super_admin',
     label: 'Merkez Yönetim',
-    description: 'Tüm siteleri, canlı çağrıları ve operasyon akışını tek yerden yönetin.',
     icon: <ShieldCheck className="h-5 w-5 text-[var(--color-accent)]" />
   },
   {
     role: 'consultant',
     label: 'Danışma',
-    description: 'Düşen çağrıları devralın, kapıları uzaktan açın ve akışı takip edin.',
     icon: <Headset className="h-5 w-5 text-[var(--color-accent)]" />
   },
   {
     role: 'manager',
     label: 'Site Yönetimi',
-      description: 'Sakin paneli deneyimiyle daireleri görün, duyuru paylaşın ve saha kayıtlarını izleyin.',
     icon: <Building2 className="h-5 w-5 text-[var(--color-accent)]" />
   },
   {
     role: 'resident',
     label: 'Sakin',
-    description: 'Ziyaret onayı verin, duyuruları izleyin ve hizmet rehberine ulaşın.',
     icon: <Smartphone className="h-5 w-5 text-[var(--color-accent)]" />
   },
   {
     role: 'kiosk_device',
     label: 'Giriş Terminali',
-    description: 'Misafir, kurye ve sakin geçişlerini tek ekrandan başlatın.',
     icon: <MonitorSmartphone className="h-5 w-5 text-[var(--color-accent)]" />
   }
 ];
@@ -153,7 +147,6 @@ export function AuthConsole() {
                     </div>
                     <div>
                       <p className="font-heading text-2xl font-bold">{item.label}</p>
-                      <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--color-muted)]">{item.description}</p>
                     </div>
                   </div>
                 </motion.button>
@@ -172,7 +165,6 @@ export function AuthConsole() {
             <div>
               <p className="app-kicker">Giriş</p>
               <h2 className="mt-3 font-heading text-3xl font-bold">{selectedMeta.label}</h2>
-              <p className="mt-3 text-sm leading-6 text-[var(--color-muted)]">{selectedMeta.description}</p>
             </div>
             <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] px-3 py-2 text-xs font-semibold text-[var(--color-accent)]">
               Güvenli oturum
