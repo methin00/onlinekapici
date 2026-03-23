@@ -3,21 +3,26 @@
 import {
   BellRing,
   Building2,
+  ChevronLeft,
+  ChevronRight,
   Headset,
   LayoutDashboard,
   LoaderCircle,
+  LogOut,
   Megaphone,
   Plus,
   UserRoundCog,
   Wrench
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '../providers/auth-provider';
 import {
   usePortalData,
   type GeneratedAccountCredentials
 } from '../providers/portal-data-provider';
 import { useToast } from '../providers/toast-provider';
+import { SitesManagementConsole } from './sites-management-console';
 import { BrandLogo } from '../ui/brand-logo';
 import {
   buildUnitResidentRows,
@@ -183,6 +188,21 @@ function roleTitle(role: PortalRole) {
   }
 }
 
+function sessionRoleLabel(role: PortalRole) {
+  switch (role) {
+    case 'super_admin':
+      return 'Merkez yönetimi';
+    case 'consultant':
+      return 'Danışma';
+    case 'manager':
+      return 'Site yöneticisi';
+    case 'resident':
+      return 'Daire sakini';
+    case 'kiosk_device':
+      return 'Giriş terminali';
+  }
+}
+
 function at(value?: string) {
   return value ? new Date(value).getTime() : 0;
 }
@@ -252,8 +272,52 @@ function sortByName<T extends { name: string }>(items: T[]) {
   return [...items].sort((a, b) => a.name.localeCompare(b.name, 'tr'));
 }
 
+function readDashboardQueryTab(): DashboardTab | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const tab = new URLSearchParams(window.location.search).get('tab');
+
+  if (
+    tab === 'overview' ||
+    tab === 'structure' ||
+    tab === 'assignments' ||
+    tab === 'calls' ||
+    tab === 'announcements' ||
+    tab === 'services'
+  ) {
+    return tab;
+  }
+
+  return null;
+}
+
+function writeDashboardQueryTab(tab: DashboardTab) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+
+  if (tab === 'overview') {
+    url.searchParams.delete('tab');
+  } else {
+    url.searchParams.set('tab', tab);
+  }
+
+  const nextSearch = url.searchParams.toString();
+  const nextUrl = `${url.pathname}${nextSearch ? `?${nextSearch}` : ''}${url.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+  if (nextUrl !== currentUrl) {
+    window.history.replaceState(window.history.state, '', nextUrl);
+  }
+}
+
 export function DashboardConsole() {
-  const { session } = useAuth();
+  const { session, logout } = useAuth();
+  const router = useRouter();
   const {
     state,
     refreshState,
@@ -283,7 +347,11 @@ export function DashboardConsole() {
   const isSuperAdmin = user?.role === 'super_admin';
 
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
+  const [isSessionTrayOpen, setIsSessionTrayOpen] = useState(false);
+  const [signOutPending, setSignOutPending] = useState(false);
   const [selectedSiteId, setSelectedSiteId] = useState('');
+  const [selectedSiteCityFilter, setSelectedSiteCityFilter] = useState('');
+  const [selectedSiteDistrictFilter, setSelectedSiteDistrictFilter] = useState('');
   const [selectedBuildingFilterId, setSelectedBuildingFilterId] = useState('all');
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [siteSetupForm, setSiteSetupForm] = useState<SiteSetupForm>(createEmptySiteSetupForm());
@@ -302,12 +370,22 @@ export function DashboardConsole() {
     category: 'Operasyon' as Announcement['category']
   });
   const [serviceForm, setServiceForm] = useState<ServiceForm>(EMPTY_SERVICE_FORM);
+  const hasInitializedTabQuerySyncRef = useRef(false);
+
+  useEffect(() => {
+    const tab = readDashboardQueryTab();
+
+    if (tab) {
+      setActiveTab(tab);
+    }
+  }, []);
   const [serviceEditForms, setServiceEditForms] = useState<Record<string, ServiceForm>>({});
 
   const visibleSites = useMemo(
     () => (user ? getVisibleSites(state, user) : []),
     [state, user]
   );
+  const sortedVisibleSites = useMemo(() => sortByName(visibleSites), [visibleSites]);
   const visibleBuildings = useMemo(
     () => (user ? getVisibleBuildings(state, user) : []),
     [state, user]
@@ -330,15 +408,68 @@ export function DashboardConsole() {
   );
 
   useEffect(() => {
-    if (!visibleSites.length) {
+    if (!sortedVisibleSites.length) {
       setSelectedSiteId('');
       return;
     }
 
-    if (!visibleSites.some((site) => site.id === selectedSiteId)) {
-      setSelectedSiteId(visibleSites[0].id);
+    if (!sortedVisibleSites.some((site) => site.id === selectedSiteId)) {
+      setSelectedSiteId(sortedVisibleSites[0].id);
     }
-  }, [selectedSiteId, visibleSites]);
+  }, [selectedSiteId, sortedVisibleSites]);
+
+  const siteCityOptions = useMemo(
+    () =>
+      [...new Set(sortedVisibleSites.map((site) => site.city).filter(Boolean))].sort((left, right) =>
+        left.localeCompare(right, 'tr')
+      ),
+    [sortedVisibleSites]
+  );
+
+  const siteDistrictOptions = useMemo(() => {
+    const sourceSites = selectedSiteCityFilter
+      ? sortedVisibleSites.filter((site) => site.city === selectedSiteCityFilter)
+      : sortedVisibleSites;
+
+    return [...new Set(sourceSites.map((site) => site.district).filter(Boolean))].sort(
+      (left, right) => left.localeCompare(right, 'tr')
+    );
+  }, [selectedSiteCityFilter, sortedVisibleSites]);
+
+  const filteredSidebarSites = useMemo(
+    () =>
+      sortedVisibleSites.filter((site) => {
+        if (selectedSiteCityFilter && site.city !== selectedSiteCityFilter) {
+          return false;
+        }
+
+        if (selectedSiteDistrictFilter && site.district !== selectedSiteDistrictFilter) {
+          return false;
+        }
+
+        return true;
+      }),
+    [selectedSiteCityFilter, selectedSiteDistrictFilter, sortedVisibleSites]
+  );
+
+  useEffect(() => {
+    if (
+      selectedSiteDistrictFilter &&
+      !siteDistrictOptions.includes(selectedSiteDistrictFilter)
+    ) {
+      setSelectedSiteDistrictFilter('');
+    }
+  }, [selectedSiteDistrictFilter, siteDistrictOptions]);
+
+  useEffect(() => {
+    if (!filteredSidebarSites.length) {
+      return;
+    }
+
+    if (!filteredSidebarSites.some((site) => site.id === selectedSiteId)) {
+      setSelectedSiteId(filteredSidebarSites[0].id);
+    }
+  }, [filteredSidebarSites, selectedSiteId]);
 
   useEffect(() => {
     if (!isSuperAdmin && ['structure', 'assignments'].includes(activeTab)) {
@@ -346,9 +477,21 @@ export function DashboardConsole() {
     }
   }, [activeTab, isSuperAdmin]);
 
+  useEffect(() => {
+    if (!hasInitializedTabQuerySyncRef.current) {
+      hasInitializedTabQuerySyncRef.current = true;
+      return;
+    }
+
+    writeDashboardQueryTab(activeTab);
+  }, [activeTab]);
+
   const activeSite = useMemo(
-    () => visibleSites.find((site) => site.id === selectedSiteId) ?? visibleSites[0] ?? null,
-    [selectedSiteId, visibleSites]
+    () =>
+      sortedVisibleSites.find((site) => site.id === selectedSiteId) ??
+      sortedVisibleSites[0] ??
+      null,
+    [selectedSiteId, sortedVisibleSites]
   );
   const activeSiteId = activeSite?.id ?? '';
 
@@ -675,6 +818,21 @@ export function DashboardConsole() {
       });
     } finally {
       setPendingAction((current) => (current === actionKey ? null : current));
+    }
+  }
+
+  async function handleLogout() {
+    if (signOutPending) {
+      return;
+    }
+
+    setSignOutPending(true);
+
+    try {
+      await logout();
+      router.replace('/auth');
+    } finally {
+      setSignOutPending(false);
     }
   }
 
@@ -1032,1302 +1190,7 @@ export function DashboardConsole() {
   }
 
   if (activeTab === 'structure' && isSuperAdmin) {
-    content = (
-      <div className="space-y-6">
-        <section className="app-card p-5">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="app-kicker">Yeni Site Kurulumu</p>
-              <h3 className="mt-2 font-heading text-2xl font-bold">
-                Site, blok ve daireleri tek akışta kur
-              </h3>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--color-muted)]">
-                Önce site bilgisini girin, sonra blokları ekleyin. Her blok için kat sayısını
-                belirleyip kat bazlı daire sayısı verebilir veya toplam daireyi katlara eşit
-                dağıtabilirsiniz.
-              </p>
-            </div>
-            <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] px-4 py-3 text-right">
-              <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                Kurulum özeti
-              </p>
-              <p className="mt-2 font-semibold">
-                {siteSetupForm.blocks.length} blok · {totalPlannedUnits} daire
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-5 grid gap-3 lg:grid-cols-4">
-            <input
-              className="app-input px-4 py-4"
-              value={siteSetupForm.name}
-              onChange={(event) =>
-                setSiteSetupForm((current) => ({ ...current, name: event.target.value }))
-              }
-              placeholder="Site adı"
-              type="text"
-            />
-            <input
-              className="app-input px-4 py-4 lg:col-span-2"
-              value={siteSetupForm.address}
-              onChange={(event) =>
-                setSiteSetupForm((current) => ({ ...current, address: event.target.value }))
-              }
-              placeholder="Adres"
-              type="text"
-            />
-            <input
-              className="app-input px-4 py-4"
-              value={siteSetupForm.city}
-              onChange={(event) =>
-                setSiteSetupForm((current) => ({ ...current, city: event.target.value }))
-              }
-              placeholder="Şehir"
-              type="text"
-            />
-            <input
-              className="app-input px-4 py-4"
-              value={siteSetupForm.district}
-              onChange={(event) =>
-                setSiteSetupForm((current) => ({ ...current, district: event.target.value }))
-              }
-              placeholder="İlçe"
-              type="text"
-            />
-          </div>
-
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">
-                Blok planı
-              </p>
-              <p className="mt-2 text-sm text-[var(--color-muted)]">
-                Her blok için kat ve daire düzenini burada belirleyin.
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={isDbActionLocked}
-              onClick={() =>
-                setSiteSetupForm((current) => ({
-                  ...current,
-                  blocks: [...current.blocks, createSitePlanBlock(current.blocks.length)]
-                }))
-              }
-              className="app-button-secondary inline-flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Plus className="h-4 w-4" />
-              Blok ekle
-            </button>
-          </div>
-
-          <div className="mt-5 space-y-4">
-            {siteSetupForm.blocks.map((block, index) => {
-              const equalDistribution = getEqualDistribution(block.totalUnits, block.floorCount);
-              const previewFloorCounts =
-                block.distributionMode === 'equal'
-                  ? equalDistribution
-                  : resizeFloorUnitCounts(block.floorUnitCounts, block.floorCount).map((value) =>
-                      parseNonNegativeInteger(value, 0)
-                    );
-
-              return (
-                <div
-                  key={block.id}
-                  className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                        Blok {index + 1}
-                      </p>
-                      <h4 className="mt-2 font-heading text-xl font-bold">
-                        {block.name || `Blok ${index + 1}`}
-                      </h4>
-                    </div>
-                    {siteSetupForm.blocks.length > 1 ? (
-                      <button
-                        type="button"
-                        disabled={isDbActionLocked}
-                        onClick={() =>
-                          setSiteSetupForm((current) => ({
-                            ...current,
-                            blocks: current.blocks.filter((item) => item.id !== block.id)
-                          }))
-                        }
-                        className="app-button-secondary inline-flex items-center justify-center gap-2 px-3 py-2 text-[11px] uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        Kaldır
-                      </button>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-4 grid gap-3 lg:grid-cols-4">
-                    <input
-                      className="app-input px-4 py-4"
-                      value={block.name}
-                      onChange={(event) =>
-                        updateSiteSetupBlock(block.id, (current) => ({
-                          ...current,
-                          name: event.target.value
-                        }))
-                      }
-                      placeholder={`${String.fromCharCode(65 + (index % 26))} Blok`}
-                      type="text"
-                    />
-                    <input
-                      className="app-input px-4 py-4"
-                      value={block.doorLabel}
-                      onChange={(event) =>
-                        updateSiteSetupBlock(block.id, (current) => ({
-                          ...current,
-                          doorLabel: event.target.value
-                        }))
-                      }
-                      placeholder={`${String.fromCharCode(65 + (index % 26))} Giriş`}
-                      type="text"
-                    />
-                    <input
-                      className="app-input px-4 py-4"
-                      value={block.floorCount}
-                      onChange={(event) =>
-                        updateSiteSetupBlock(block.id, (current) => ({
-                          ...current,
-                          floorCount: event.target.value,
-                          floorUnitCounts: resizeFloorUnitCounts(
-                            current.floorUnitCounts,
-                            event.target.value
-                          )
-                        }))
-                      }
-                      min={1}
-                      placeholder="Kat sayısı"
-                      type="number"
-                    />
-                    <input
-                      className="app-input px-4 py-4 lg:col-span-2"
-                      value={block.address}
-                      onChange={(event) =>
-                        updateSiteSetupBlock(block.id, (current) => ({
-                          ...current,
-                          address: event.target.value
-                        }))
-                      }
-                      placeholder="Blok adresi, boş kalırsa site adresi kullanılır"
-                      type="text"
-                    />
-                    <select
-                      className="app-select px-4 py-4"
-                      value={block.distributionMode}
-                      onChange={(event) =>
-                        updateSiteSetupBlock(block.id, (current) => {
-                          const nextMode = event.target.value as SitePlanDistributionMode;
-
-                          if (nextMode === 'equal') {
-                            return {
-                              ...current,
-                              distributionMode: 'equal',
-                              totalUnits: String(Math.max(getPlannedUnitCountForBlock(current), 1))
-                            };
-                          }
-
-                          return {
-                            ...current,
-                            distributionMode: 'custom',
-                            floorUnitCounts:
-                              current.distributionMode === 'equal'
-                                ? getEqualDistribution(
-                                    current.totalUnits,
-                                    current.floorCount
-                                  ).map(String)
-                                : resizeFloorUnitCounts(
-                                    current.floorUnitCounts,
-                                    current.floorCount
-                                  )
-                          };
-                        })
-                      }
-                    >
-                      <option value="equal">Toplam daireyi katlara eşit dağıt</option>
-                      <option value="custom">Kat kat daire belirle</option>
-                    </select>
-                    {block.distributionMode === 'equal' ? (
-                      <input
-                        className="app-input px-4 py-4"
-                        value={block.totalUnits}
-                        onChange={(event) =>
-                          updateSiteSetupBlock(block.id, (current) => ({
-                            ...current,
-                            totalUnits: event.target.value
-                          }))
-                        }
-                        min={1}
-                        placeholder="Toplam daire"
-                        type="number"
-                      />
-                    ) : (
-                      <div className="rounded-md border-2 border-[var(--color-line)] bg-black/10 px-4 py-4 text-sm text-[var(--color-muted)]">
-                        Kat bazlı plan aktif. Aşağıda her katın daire sayısını ayarlayın.
-                      </div>
-                    )}
-                  </div>
-
-                  {block.distributionMode === 'custom' ? (
-                    <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                      {resizeFloorUnitCounts(block.floorUnitCounts, block.floorCount).map(
-                        (count, floorIndex) => (
-                          <label
-                            key={`${block.id}-floor-${floorIndex + 1}`}
-                            className="space-y-2 rounded-md border border-[var(--color-line)] bg-black/10 p-3"
-                          >
-                            <span className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                              {floorIndex + 1}. kat
-                            </span>
-                            <input
-                              className="app-input px-4 py-3"
-                              value={count}
-                              onChange={(event) =>
-                                updateSiteSetupBlock(block.id, (current) => {
-                                  const nextCounts = resizeFloorUnitCounts(
-                                    current.floorUnitCounts,
-                                    current.floorCount
-                                  );
-                                  nextCounts[floorIndex] = event.target.value;
-
-                                  return {
-                                    ...current,
-                                    floorUnitCounts: nextCounts
-                                  };
-                                })
-                              }
-                              min={0}
-                              type="number"
-                            />
-                          </label>
-                        )
-                      )}
-                    </div>
-                  ) : null}
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {previewFloorCounts.map((count, floorIndex) => (
-                      <span
-                        key={`${block.id}-preview-${floorIndex + 1}`}
-                        className="rounded-full border border-[var(--color-line)] px-3 py-2 text-xs text-[var(--color-muted)]"
-                      >
-                        {floorIndex + 1}. kat: {count} daire
-                      </span>
-                    ))}
-                  </div>
-
-                  <p className="mt-4 text-sm text-[var(--color-muted)]">
-                    Bu bloktan toplam {getPlannedUnitCountForBlock(block)} daire oluşturulacak.
-                  </p>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-[var(--color-muted)]">
-              Kurulum tamamlandığında site anında listeye düşer ve detay ekranı güncellenir.
-            </p>
-            <button
-              type="button"
-              disabled={isDbActionLocked}
-              onClick={() =>
-                void run(
-                  'create-site-layout',
-                  handleCreateSiteLayout,
-                  'Site, bloklar ve daireler oluşturuldu.'
-                )
-              }
-              className="app-button inline-flex items-center justify-center gap-2 px-5 py-4 text-sm uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {renderActionLabel('create-site-layout', 'Siteyi kur', 'Kuruluyor')}
-            </button>
-          </div>
-        </section>
-        <section className="hidden">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="app-kicker">Siteler</p>
-              <h3 className="mt-2 font-heading text-2xl font-bold">Kayıtlı saha listesi</h3>
-            </div>
-            <p className="text-sm text-[var(--color-muted)]">
-              Bir site seçerek detay ve daire tablolarına geçebilirsiniz.
-            </p>
-          </div>
-          <div className="mt-5 grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-            {visibleSites.map((site) => {
-              const buildingCount = visibleBuildings.filter(
-                (building) => building.siteId === site.id
-              ).length;
-              const buildingIds = new Set(
-                visibleBuildings
-                  .filter((building) => building.siteId === site.id)
-                  .map((building) => building.id)
-              );
-              const unitCount = visibleUnits.filter((unit) => buildingIds.has(unit.buildingId)).length;
-
-              return (
-                <button
-                  key={site.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedSiteId(site.id);
-                    setSelectedBuildingFilterId('all');
-                  }}
-                  data-active={activeSiteId === site.id}
-                  className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4 text-left transition hover:-translate-y-0.5 data-[active=true]:border-[var(--color-accent)] data-[active=true]:bg-[var(--color-accent-soft)]"
-                >
-                  <p className="font-semibold">{site.name}</p>
-                  <p className="mt-2 text-sm text-[var(--color-muted)]">
-                    {site.district} / {site.city}
-                  </p>
-                  <p className="mt-3 text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                    {buildingCount} blok · {unitCount} daire
-                  </p>
-                </button>
-              );
-            })}
-            {!visibleSites.length ? (
-              <div className="rounded-md border-2 border-dashed border-[var(--color-line)] p-6 text-sm text-[var(--color-muted)]">
-                Henüz site bulunmuyor. Yukarıdaki kurulum alanıyla ilk siteyi ekleyebilirsiniz.
-              </div>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="app-card overflow-hidden p-0">
-          <div className="border-b-2 border-[var(--color-line)] px-5 py-4">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="app-kicker">Siteler</p>
-                <h3 className="mt-2 font-heading text-2xl font-bold">
-                  {activeSite ? `${activeSite.name} daire listesi` : 'Daire listesi'}
-                </h3>
-                <p className="mt-3 text-sm leading-7 text-[var(--color-muted)]">
-                  {activeSite
-                    ? selectedBuildingFilterId === 'all'
-                      ? 'Seçili sitedeki tüm daireler aşağıdaki tabloda listelenir.'
-                      : `${siteBuildings.find((building) => building.id === selectedBuildingFilterId)?.name ?? 'Blok'} filtresi uygulanıyor.`
-                    : 'Önce bir site seçin.'}
-                </p>
-              </div>
-              <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] px-4 py-3 text-right">
-                <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                  Görüntülenen kayıt
-                </p>
-                <p className="mt-2 font-semibold">
-                  {activeSite ? `${filteredResidentRows.length} daire` : '0 daire'}
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Blok</th>
-                  <th>Daire No</th>
-                  <th>Daire ID</th>
-                  <th>Kat</th>
-                  <th>Daire sakini</th>
-                  <th>Tel. no</th>
-                  <th>Durum</th>
-                  <th>Detay</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeSite
-                  ? filteredResidentRows.map((row) => {
-                      const isSelected = row.unit.id === selectedUnitId;
-                      const residentStatus = row.resident
-                        ? row.resident.role === 'manager'
-                          ? 'Dolu / Yönetici'
-                          : 'Dolu'
-                        : 'Boş';
-
-                      return (
-                        <tr
-                          key={row.unit.id}
-                          className={isSelected ? 'bg-[var(--color-accent-soft)]/60' : undefined}
-                        >
-                          <td>{row.building?.name ?? '-'}</td>
-                          <td>{row.unit.unitNumber}</td>
-                          <td className="text-xs font-semibold text-[var(--color-accent)]">
-                            {row.unit.unitCode}
-                          </td>
-                          <td>{row.unit.floor}</td>
-                          <td>
-                            {row.resident ? (
-                              <div>
-                                <p className="font-semibold">{row.resident.fullName}</p>
-                                <p className="mt-1 text-xs text-[var(--color-muted)]">
-                                  {row.resident.title}
-                                </p>
-                              </div>
-                            ) : (
-                              <span className="text-sm text-[var(--color-muted)]">Boş daire</span>
-                            )}
-                          </td>
-                          <td>{row.resident?.phone ?? '-'}</td>
-                          <td>{residentStatus}</td>
-                          <td>
-                            <button
-                              type="button"
-                              onClick={() => setSelectedUnitId(row.unit.id)}
-                              className="app-button-secondary inline-flex items-center justify-center gap-2 px-3 py-2 text-[11px] uppercase tracking-[0.16em]"
-                            >
-                              {isSelected ? 'Açık' : 'Detay'}
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  : null}
-                {!activeSite ? (
-                  <tr>
-                    <td colSpan={8} className="text-center text-sm text-[var(--color-muted)]">
-                      Görüntülenecek site yok.
-                    </td>
-                  </tr>
-                ) : null}
-                {activeSite && !filteredResidentRows.length ? (
-                  <tr>
-                    <td colSpan={8} className="text-center text-sm text-[var(--color-muted)]">
-                      Bu filtre için daire bulunmuyor.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        {activeSite ? (
-          <>
-            <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-              <section className="app-card p-5">
-                <p className="app-kicker">Site Detay Sayfası</p>
-                <h3 className="mt-2 font-heading text-2xl font-bold">{activeSite.name}</h3>
-                <p className="mt-3 text-sm leading-7 text-[var(--color-muted)]">
-                  {activeSite.address} · {activeSite.district} / {activeSite.city}
-                </p>
-                <div className="mt-5 grid gap-3 md:grid-cols-3">
-                  <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                    <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                      Blok
-                    </p>
-                    <p className="mt-3 font-heading text-3xl font-bold">{siteBuildings.length}</p>
-                  </div>
-                  <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                    <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                      Daire
-                    </p>
-                    <p className="mt-3 font-heading text-3xl font-bold">{siteUnits.length}</p>
-                  </div>
-                  <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                    <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                      Boş daire
-                    </p>
-                    <p className="mt-3 font-heading text-3xl font-bold">
-                      {emptyResidentRows.length}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-5 grid gap-3 lg:grid-cols-2">
-                  <input
-                    className="app-input px-4 py-4"
-                    value={siteForm.name}
-                    onChange={(event) =>
-                      setSiteForm((current) => ({ ...current, name: event.target.value }))
-                    }
-                    placeholder="Site adı"
-                    type="text"
-                  />
-                  <input
-                    className="app-input px-4 py-4"
-                    value={siteForm.district}
-                    onChange={(event) =>
-                      setSiteForm((current) => ({ ...current, district: event.target.value }))
-                    }
-                    placeholder="İlçe"
-                    type="text"
-                  />
-                  <input
-                    className="app-input px-4 py-4 lg:col-span-2"
-                    value={siteForm.address}
-                    onChange={(event) =>
-                      setSiteForm((current) => ({ ...current, address: event.target.value }))
-                    }
-                    placeholder="Adres"
-                    type="text"
-                  />
-                  <input
-                    className="app-input px-4 py-4"
-                    value={siteForm.city}
-                    onChange={(event) =>
-                      setSiteForm((current) => ({ ...current, city: event.target.value }))
-                    }
-                    placeholder="Şehir"
-                    type="text"
-                  />
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    disabled={isDbActionLocked}
-                    onClick={() =>
-                      void run(
-                        `update-site:${activeSiteId}`,
-                        () =>
-                          updateSiteDetails({
-                            siteId: activeSiteId,
-                            name: siteForm.name.trim() || activeSite.name,
-                            address: siteForm.address.trim() || activeSite.address,
-                            district: siteForm.district.trim() || activeSite.district,
-                            city: siteForm.city.trim() || activeSite.city
-                          }),
-                        'Site güncellendi.'
-                      )
-                    }
-                    className="app-button inline-flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {renderActionLabel(`update-site:${activeSiteId}`, 'Kaydet', 'Kaydediliyor')}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isDbActionLocked}
-                    onClick={() =>
-                      void run(
-                        `delete-site:${activeSiteId}`,
-                        () => deleteSite(activeSiteId),
-                        'Site silindi.',
-                        'info'
-                      )
-                    }
-                    className="app-button-secondary inline-flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {renderActionLabel(`delete-site:${activeSiteId}`, 'Sil', 'Siliniyor')}
-                  </button>
-                </div>
-              </section>
-
-              <section className="hidden">
-                <p className="app-kicker">Boş Daireye Sakin Ata</p>
-                <h3 className="mt-2 font-heading text-2xl font-bold">
-                  Daire sakini hesabını detay sayfasından aç
-                </h3>
-                <p className="mt-3 text-sm leading-7 text-[var(--color-muted)]">
-                  Aşağıdaki seçim listesi sadece boş daireleri gösterir. Blok filtresi seçiliyse
-                  önce o bloğun boş daireleri önerilir.
-                </p>
-                <div className="mt-5 space-y-3">
-                  <select
-                    className="app-select px-4 py-4"
-                    value={residentForm.unitId}
-                    onChange={(event) =>
-                      setResidentForm((current) => ({ ...current, unitId: event.target.value }))
-                    }
-                  >
-                    {assignableResidentRows.map((row) => (
-                      <option key={row.unit.id} value={row.unit.id}>
-                        {row.building?.name ?? 'Blok'} / Daire {row.unit.unitNumber} /{' '}
-                        {row.unit.unitCode}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    className="app-input px-4 py-4"
-                    value={residentForm.fullName}
-                    onChange={(event) =>
-                      setResidentForm((current) => ({ ...current, fullName: event.target.value }))
-                    }
-                    placeholder="Ad soyad"
-                    type="text"
-                  />
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <input
-                      className="app-input px-4 py-4"
-                      value={residentForm.phone}
-                      onChange={(event) =>
-                        setResidentForm((current) => ({ ...current, phone: event.target.value }))
-                      }
-                      placeholder="Telefon"
-                      type="text"
-                    />
-                    <input
-                      className="app-input px-4 py-4"
-                      value={residentForm.title}
-                      onChange={(event) =>
-                        setResidentForm((current) => ({ ...current, title: event.target.value }))
-                      }
-                      placeholder="Daire sakini"
-                      type="text"
-                    />
-                  </div>
-                  <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                    <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                      Giriş kimliği
-                    </p>
-                    <p className="mt-2 font-semibold">
-                      {residentForm.unitId ? unitLabel(state, residentForm.unitId) : 'Daire seçin'}
-                    </p>
-                    <p className="mt-2 text-sm text-[var(--color-muted)]">
-                      Daire ID otomatik kullanılır. Şifre sistem tarafında otomatik oluşturulur.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={isDbActionLocked || !assignableResidentRows.length}
-                    onClick={() =>
-                      void run(
-                        'create-resident',
-                        async () => {
-                          const credentials = await createResident(residentForm);
-                          setLastCreatedCredentials(credentials);
-                          setResidentForm({
-                            ...EMPTY_RESIDENT_FORM,
-                            unitId: assignableResidentRows[0]?.unit.id ?? ''
-                          });
-                        },
-                        'Yeni sakin oluşturuldu.'
-                      )
-                    }
-                    className="app-button inline-flex w-full items-center justify-center gap-2 px-5 py-4 text-sm uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {renderActionLabel('create-resident', 'Sakin ekle', 'Oluşturuluyor')}
-                  </button>
-                  {lastCreatedCredentials?.role === 'resident' ? (
-                    <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                      <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                        Oluşan giriş
-                      </p>
-                      <p className="mt-3 font-semibold">{lastCreatedCredentials.fullName}</p>
-                      <p className="mt-2 text-sm text-[var(--color-muted)]">
-                        Daire ID: {lastCreatedCredentials.identifier}
-                      </p>
-                      <p className="mt-1 text-sm text-[var(--color-muted)]">
-                        Şifre: {lastCreatedCredentials.password}
-                      </p>
-                    </div>
-                  ) : null}
-                </div>
-              </section>
-
-              <section className="app-card p-5">
-                <p className="app-kicker">Daire Detayı</p>
-                {selectedUnit ? (
-                  <>
-                    <h3 className="mt-2 font-heading text-2xl font-bold">
-                      {selectedBuilding?.name ?? 'Blok'} / Daire {selectedUnit.unitNumber}
-                    </h3>
-                    <p className="mt-3 text-sm leading-7 text-[var(--color-muted)]">
-                      Daire ID: {selectedUnit.unitCode}
-                    </p>
-
-                    <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                      <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                        <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                          Kat
-                        </p>
-                        <p className="mt-2 font-semibold">{selectedUnit.floor}</p>
-                      </div>
-                      <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                        <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                          Durum
-                        </p>
-                        <p className="mt-2 font-semibold">{selectedResident ? 'Dolu' : 'Boş'}</p>
-                      </div>
-                      <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                        <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                          Blok
-                        </p>
-                        <p className="mt-2 font-semibold">{selectedBuilding?.name ?? '-'}</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                      <input
-                        className="app-input px-4 py-4"
-                        value={selectedUnitForm.unitNumber}
-                        onChange={(event) =>
-                          setUnitForms((current) => ({
-                            ...current,
-                            [selectedUnit.id]: {
-                              ...selectedUnitForm,
-                              buildingId: selectedUnit.buildingId,
-                              unitNumber: event.target.value
-                            }
-                          }))
-                        }
-                        placeholder="Daire numarası"
-                        type="text"
-                      />
-                      <input
-                        className="app-input px-4 py-4"
-                        value={selectedUnitForm.floor}
-                        onChange={(event) =>
-                          setUnitForms((current) => ({
-                            ...current,
-                            [selectedUnit.id]: {
-                              ...selectedUnitForm,
-                              buildingId: selectedUnit.buildingId,
-                              floor: event.target.value
-                            }
-                          }))
-                        }
-                        min={1}
-                        placeholder="Kat"
-                        type="number"
-                      />
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      <button
-                        type="button"
-                        disabled={isDbActionLocked}
-                        className="app-button inline-flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                        onClick={() =>
-                          void run(
-                            `update-unit:${selectedUnit.id}`,
-                            () =>
-                              updateUnitDetails({
-                                unitId: selectedUnit.id,
-                                unitNumber:
-                                  selectedUnitForm.unitNumber.trim() || selectedUnit.unitNumber,
-                                floor: parsePositiveInteger(
-                                  selectedUnitForm.floor,
-                                  selectedUnit.floor
-                                )
-                              }),
-                            'Daire güncellendi.'
-                          )
-                        }
-                      >
-                        {renderActionLabel(
-                          `update-unit:${selectedUnit.id}`,
-                          'Daireyi kaydet',
-                          'Kaydediliyor'
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={isDbActionLocked}
-                        className="app-button-secondary inline-flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                        onClick={() =>
-                          void run(
-                            `delete-unit:${selectedUnit.id}`,
-                            () => deleteUnit(selectedUnit.id),
-                            'Daire silindi.',
-                            'info'
-                          )
-                        }
-                      >
-                        {renderActionLabel(
-                          `delete-unit:${selectedUnit.id}`,
-                          'Daireyi sil',
-                          'Siliniyor'
-                        )}
-                      </button>
-                    </div>
-
-                    <div className="mt-6 border-t border-[var(--color-line)] pt-6">
-                      <p className="app-kicker">
-                        {selectedResident ? 'Daire Sakini' : 'Boş Daireye Sakin Ata'}
-                      </p>
-
-                      {selectedResident ? (
-                        <>
-                          <div className="mt-4 rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                            <p className="font-semibold">{selectedResident.fullName}</p>
-                            <p className="mt-2 text-sm text-[var(--color-muted)]">
-                              {selectedResident.title} · {selectedResident.phone}
-                            </p>
-                            <p className="mt-1 text-sm text-[var(--color-muted)]">
-                              Giriş kimliği: {selectedResident.loginId}
-                            </p>
-                          </div>
-
-                          <div className="mt-4 grid gap-3">
-                            <input
-                              className="app-input px-4 py-4"
-                              value={residentForm.fullName}
-                              onChange={(event) =>
-                                setResidentForm((current) => ({
-                                  ...current,
-                                  fullName: event.target.value
-                                }))
-                              }
-                              placeholder="Ad soyad"
-                              type="text"
-                            />
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <input
-                                className="app-input px-4 py-4"
-                                value={residentForm.phone}
-                                onChange={(event) =>
-                                  setResidentForm((current) => ({
-                                    ...current,
-                                    phone: event.target.value
-                                  }))
-                                }
-                                placeholder="Telefon"
-                                type="text"
-                              />
-                              <input
-                                className="app-input px-4 py-4"
-                                value={residentForm.title}
-                                onChange={(event) =>
-                                  setResidentForm((current) => ({
-                                    ...current,
-                                    title: event.target.value
-                                  }))
-                                }
-                                placeholder="Unvan"
-                                type="text"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="mt-4 flex flex-wrap gap-3">
-                            <button
-                              type="button"
-                              disabled={isDbActionLocked}
-                              className="app-button inline-flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                              onClick={() =>
-                                void run(
-                                  `update-resident:${selectedResident.id}`,
-                                  handleUpdateSelectedResident,
-                                  'Daire sakini güncellendi.'
-                                )
-                              }
-                            >
-                              {renderActionLabel(
-                                `update-resident:${selectedResident.id}`,
-                                'Sakini kaydet',
-                                'Kaydediliyor'
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={isDbActionLocked}
-                              className="app-button-secondary inline-flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                              onClick={() =>
-                                void run(
-                                  `delete-resident:${selectedResident.id}`,
-                                  handleDeleteSelectedResident,
-                                  'Daire sakini silindi.',
-                                  'info'
-                                )
-                              }
-                            >
-                              {renderActionLabel(
-                                `delete-resident:${selectedResident.id}`,
-                                'Sakini sil',
-                                'Siliniyor'
-                              )}
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <p className="mt-4 text-sm leading-7 text-[var(--color-muted)]">
-                            Bu dairede henüz sakin kaydı yok. Aşağıdaki formdan yeni sakin hesabı
-                            oluşturabilirsiniz.
-                          </p>
-                          <div className="mt-4 grid gap-3">
-                            <input
-                              className="app-input px-4 py-4"
-                              value={residentForm.fullName}
-                              onChange={(event) =>
-                                setResidentForm((current) => ({
-                                  ...current,
-                                  fullName: event.target.value
-                                }))
-                              }
-                              placeholder="Ad soyad"
-                              type="text"
-                            />
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <input
-                                className="app-input px-4 py-4"
-                                value={residentForm.phone}
-                                onChange={(event) =>
-                                  setResidentForm((current) => ({
-                                    ...current,
-                                    phone: event.target.value
-                                  }))
-                                }
-                                placeholder="Telefon"
-                                type="text"
-                              />
-                              <input
-                                className="app-input px-4 py-4"
-                                value={residentForm.title}
-                                onChange={(event) =>
-                                  setResidentForm((current) => ({
-                                    ...current,
-                                    title: event.target.value
-                                  }))
-                                }
-                                placeholder="Daire sakini"
-                                type="text"
-                              />
-                            </div>
-                            <div className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                              <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                                Giriş kimliği
-                              </p>
-                              <p className="mt-2 font-semibold">
-                                {unitLabel(state, selectedUnit.id)}
-                              </p>
-                              <p className="mt-2 text-sm text-[var(--color-muted)]">
-                                Daire ID otomatik kullanılır. Şifre sistem tarafından otomatik
-                                oluşturulur.
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="mt-4">
-                            <button
-                              type="button"
-                              disabled={isDbActionLocked}
-                              onClick={() =>
-                                void run(
-                                  `create-resident:${selectedUnit.id}`,
-                                  handleCreateResidentForSelectedUnit,
-                                  'Yeni sakin oluşturuldu.'
-                                )
-                              }
-                              className="app-button inline-flex w-full items-center justify-center gap-2 px-5 py-4 text-sm uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {renderActionLabel(
-                                `create-resident:${selectedUnit.id}`,
-                                'Sakin ekle',
-                                'Oluşturuluyor'
-                              )}
-                            </button>
-                          </div>
-                        </>
-                      )}
-
-                      {lastCreatedCredentials?.role === 'resident' &&
-                      lastCreatedCredentials.identifier === selectedUnit.unitCode ? (
-                        <div className="mt-4 rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-                          <p className="text-xs uppercase tracking-[0.14em] text-[var(--color-muted)]">
-                            Oluşan giriş
-                          </p>
-                          <p className="mt-3 font-semibold">{lastCreatedCredentials.fullName}</p>
-                          <p className="mt-2 text-sm text-[var(--color-muted)]">
-                            Daire ID: {lastCreatedCredentials.identifier}
-                          </p>
-                          <p className="mt-1 text-sm text-[var(--color-muted)]">
-                            Şifre: {lastCreatedCredentials.password}
-                          </p>
-                        </div>
-                      ) : null}
-                    </div>
-                  </>
-                ) : (
-                  <p className="mt-3 text-sm leading-7 text-[var(--color-muted)]">
-                    Detayları görüntülemek için tablodan bir daire seçin.
-                  </p>
-                )}
-              </section>
-            </div>
-
-            <section className="app-card p-5">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <p className="app-kicker">Bloklar</p>
-                  <h3 className="mt-2 font-heading text-2xl font-bold">
-                    Blok bazlı güncelleme ve filtre
-                  </h3>
-                </div>
-                <select
-                  className="app-select min-w-[220px] px-4 py-3"
-                  value={selectedBuildingFilterId}
-                  onChange={(event) => setSelectedBuildingFilterId(event.target.value)}
-                >
-                  <option value="all">Tüm bloklar</option>
-                  {siteBuildings.map((building) => (
-                    <option key={building.id} value={building.id}>
-                      {building.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="mt-5 grid gap-3 xl:grid-cols-2">
-                {siteBuildings.map((building) => {
-                  const form = buildingForms[building.id] ?? EMPTY_BUILDING_FORM;
-                  const unitCount = buildingUnitCounts.get(building.id) ?? 0;
-                  const occupiedCount = buildingOccupiedCounts.get(building.id) ?? 0;
-
-                  return (
-                    <div
-                      key={building.id}
-                      className="rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-semibold">{building.name}</p>
-                          <p className="mt-1 text-sm text-[var(--color-muted)]">
-                            {unitCount} daire / {occupiedCount} dolu
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedBuildingFilterId(building.id)}
-                          className="app-button-secondary inline-flex items-center justify-center gap-2 px-3 py-2 text-[11px] uppercase tracking-[0.16em]"
-                        >
-                          Filtrele
-                        </button>
-                      </div>
-
-                      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                        <input
-                          className="app-input px-4 py-4"
-                          value={form.name}
-                          onChange={(event) =>
-                            setBuildingForms((current) => ({
-                              ...current,
-                              [building.id]: { ...form, name: event.target.value }
-                            }))
-                          }
-                          placeholder="Blok adı"
-                          type="text"
-                        />
-                        <input
-                          className="app-input px-4 py-4"
-                          value={form.doorLabel}
-                          onChange={(event) =>
-                            setBuildingForms((current) => ({
-                              ...current,
-                              [building.id]: { ...form, doorLabel: event.target.value }
-                            }))
-                          }
-                          placeholder="Kapı etiketi"
-                          type="text"
-                        />
-                        <input
-                          className="app-input px-4 py-4 lg:col-span-2"
-                          value={form.address}
-                          onChange={(event) =>
-                            setBuildingForms((current) => ({
-                              ...current,
-                              [building.id]: { ...form, address: event.target.value }
-                            }))
-                          }
-                          placeholder="Adres"
-                          type="text"
-                        />
-                      </div>
-
-                      <div className="mt-4 flex flex-wrap gap-3">
-                        <button
-                          type="button"
-                          disabled={isDbActionLocked}
-                          className="app-button inline-flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                          onClick={() =>
-                            void run(
-                              `update-building:${building.id}`,
-                              () =>
-                                updateBuildingDetails({
-                                  buildingId: building.id,
-                                  name: form.name.trim() || building.name,
-                                  address: form.address.trim() || building.address,
-                                  apiKey: building.apiKey,
-                                  doorLabel: form.doorLabel.trim() || building.doorLabel,
-                                  kioskCode: building.kioskCode
-                                }),
-                              'Blok güncellendi.'
-                            )
-                          }
-                        >
-                          {renderActionLabel(
-                            `update-building:${building.id}`,
-                            'Kaydet',
-                            'Kaydediliyor'
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isDbActionLocked}
-                          className="app-button-secondary inline-flex items-center justify-center gap-2 px-4 py-3 text-xs uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                          onClick={() =>
-                            void run(
-                              `delete-building:${building.id}`,
-                              () => deleteBuilding(building.id),
-                              'Blok silindi.',
-                              'info'
-                            )
-                          }
-                        >
-                          {renderActionLabel(
-                            `delete-building:${building.id}`,
-                            'Sil',
-                            'Siliniyor'
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-
-            <section className="hidden">
-              <div className="border-b-2 border-[var(--color-line)] px-5 py-4">
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <p className="app-kicker">Daire tablosu</p>
-                    <h3 className="mt-2 font-heading text-2xl font-bold">
-                      {selectedBuildingFilterId === 'all'
-                        ? 'Tüm bloklardaki daireler'
-                        : `${siteBuildings.find((building) => building.id === selectedBuildingFilterId)?.name ?? 'Blok'} daireleri`}
-                    </h3>
-                  </div>
-                  <p className="text-sm text-[var(--color-muted)]">
-                    {filteredResidentRows.length} kayıt görüntüleniyor
-                  </p>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Blok</th>
-                      <th>Daire ID</th>
-                      <th>Daire</th>
-                      <th>Kat</th>
-                      <th>Durum</th>
-                      <th>Sakin</th>
-                      <th>İşlem</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredResidentRows.map((row) => {
-                      const unit = row.unit;
-                      const form = unitForms[unit.id] ?? EMPTY_UNIT_FORM;
-
-                      return (
-                        <tr key={unit.id}>
-                          <td>{row.building?.name ?? '-'}</td>
-                          <td className="text-xs font-semibold text-[var(--color-accent)]">
-                            {unit.unitCode}
-                          </td>
-                          <td>
-                            <input
-                              className="app-input px-3 py-2"
-                              value={form.unitNumber}
-                              onChange={(event) =>
-                                setUnitForms((current) => ({
-                                  ...current,
-                                  [unit.id]: { ...form, unitNumber: event.target.value }
-                                }))
-                              }
-                              placeholder="Daire numarası"
-                              type="text"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              className="app-input px-3 py-2"
-                              value={form.floor}
-                              onChange={(event) =>
-                                setUnitForms((current) => ({
-                                  ...current,
-                                  [unit.id]: { ...form, floor: event.target.value }
-                                }))
-                              }
-                              min={1}
-                              placeholder="Kat"
-                              type="number"
-                            />
-                          </td>
-                          <td>{row.resident ? 'Dolu' : 'Boş'}</td>
-                          <td>
-                            {row.resident ? (
-                              <div>
-                                <p className="font-semibold">{row.resident.fullName}</p>
-                                <p className="mt-1 text-xs text-[var(--color-muted)]">
-                                  {row.resident.loginId}
-                                </p>
-                              </div>
-                            ) : (
-                              <span className="text-sm text-[var(--color-muted)]">Atanmadı</span>
-                            )}
-                          </td>
-                          <td>
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                disabled={isDbActionLocked}
-                                className="app-button-secondary inline-flex items-center justify-center gap-2 px-3 py-2 text-[11px] uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                                onClick={() =>
-                                  void run(
-                                  `update-unit:${unit.id}`,
-                                  () =>
-                                    updateUnitDetails({
-                                      unitId: unit.id,
-                                      unitNumber: form.unitNumber.trim() || unit.unitNumber,
-                                      floor: parsePositiveInteger(form.floor, unit.floor)
-                                    }),
-                                    'Daire güncellendi.'
-                                  )
-                                }
-                              >
-                                {renderActionLabel(
-                                  `update-unit:${unit.id}`,
-                                  'Kaydet',
-                                  'Kaydediliyor'
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={isDbActionLocked}
-                                className="app-button-secondary inline-flex items-center justify-center gap-2 px-3 py-2 text-[11px] uppercase tracking-[0.16em] disabled:cursor-not-allowed disabled:opacity-60"
-                                onClick={() =>
-                                  void run(
-                                    `delete-unit:${unit.id}`,
-                                    () => deleteUnit(unit.id),
-                                    'Daire silindi.',
-                                    'info'
-                                  )
-                                }
-                              >
-                                {renderActionLabel(
-                                  `delete-unit:${unit.id}`,
-                                  'Sil',
-                                  'Siliniyor'
-                                )}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {!filteredResidentRows.length ? (
-                      <tr>
-                        <td colSpan={7} className="text-center text-sm text-[var(--color-muted)]">
-                          Bu filtre için daire bulunmuyor.
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </>
-        ) : null}
-      </div>
-    );
+    content = null;
   }
 
   if (activeTab === 'assignments' && isSuperAdmin) {
@@ -2859,30 +1722,64 @@ export function DashboardConsole() {
           <BrandLogo size="md" />
           <h1 className="mt-5 font-heading text-4xl font-bold">{roleTitle(user.role)}</h1>
           <p className="mt-3 text-sm leading-6 text-[var(--color-muted)]">
-            Siteleri seçin, akışı izleyin ve yönetim işlemlerini buradan yürütün.
+            Site ve operasyon yönetimi
           </p>
-          <div className="mt-6 rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">
-              Siteler
-            </p>
-            <div className="mt-4 space-y-3">
-              {visibleSites.map((site) => (
+          <div className="mt-6 rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">
+                Siteler
+              </p>
+              <span className="rounded-full border border-[var(--color-line)] px-2.5 py-1 text-[10px] font-semibold text-[var(--color-muted)]">
+                {filteredSidebarSites.length}/{sortedVisibleSites.length}
+              </span>
+            </div>
+
+            <div className="mt-3 grid gap-2">
+              <select
+                className="app-select px-3 py-2 text-sm"
+                value={selectedSiteCityFilter}
+                onChange={(event) => setSelectedSiteCityFilter(event.target.value)}
+              >
+                <option value="">Tüm iller</option>
+                {siteCityOptions.map((city) => (
+                  <option key={city} value={city}>
+                    {city}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                className="app-select px-3 py-2 text-sm"
+                value={selectedSiteDistrictFilter}
+                onChange={(event) => setSelectedSiteDistrictFilter(event.target.value)}
+              >
+                <option value="">Tüm ilçeler</option>
+                {siteDistrictOptions.map((district) => (
+                  <option key={district} value={district}>
+                    {district}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="mt-3 max-h-[320px] space-y-2 overflow-y-auto pr-1">
+              {filteredSidebarSites.map((site) => (
                 <button
                   key={site.id}
                   type="button"
                   onClick={() => setSelectedSiteId(site.id)}
                   data-active={activeSiteId === site.id}
-                  className="w-full rounded-md border-2 border-[var(--color-line)] px-3 py-3 text-left transition hover:-translate-y-0.5 data-[active=true]:border-[var(--color-accent)] data-[active=true]:bg-[var(--color-accent-soft)]"
+                  className="w-full rounded-md border-2 border-[var(--color-line)] px-3 py-2.5 text-left transition hover:-translate-y-0.5 data-[active=true]:border-[var(--color-accent)] data-[active=true]:bg-[var(--color-accent-soft)]"
                 >
-                  <p className="font-semibold">{site.name}</p>
-                  <p className="mt-1 text-sm text-[var(--color-muted)]">
+                  <p className="text-[15px] font-semibold leading-5">{site.name}</p>
+                  <p className="mt-1 text-xs text-[var(--color-muted)]">
                     {site.district} · {site.city}
                   </p>
                 </button>
               ))}
-              {!visibleSites.length ? (
-                <div className="rounded-md border-2 border-dashed border-[var(--color-line)] p-4 text-sm text-[var(--color-muted)]">
-                  Henüz site kaydı yok.
+              {!filteredSidebarSites.length ? (
+                <div className="rounded-md border-2 border-dashed border-[var(--color-line)] p-3 text-sm text-[var(--color-muted)]">
+                  Filtreye uygun site bulunmuyor.
                 </div>
               ) : null}
             </div>
@@ -2910,17 +1807,19 @@ export function DashboardConsole() {
           <header className="app-panel px-6 py-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <p className="app-kicker">Aktif Saha</p>
+                <p className="app-kicker">{activeTab === 'structure' ? 'Siteler' : 'Aktif Saha'}</p>
                 <h2 className="mt-3 font-heading text-4xl font-bold">
-                  {activeSite?.name ?? 'Site seçin'}
+                  {activeTab === 'structure' ? 'Siteler' : activeSite?.name ?? 'Site seçin'}
                 </h2>
                 <p className="mt-3 max-w-3xl text-base leading-7 text-[var(--color-muted)]">
-                  {activeSite
-                    ? `${activeSite.address} / ${activeSite.district} / ${activeSite.city}`
-                    : 'Soldan bir site seçin.'}
+                  {activeTab === 'structure'
+                    ? 'Site listesi'
+                    : activeSite
+                      ? `${activeSite.address} / ${activeSite.district} / ${activeSite.city}`
+                      : 'Soldan bir site seçin.'}
                 </p>
               </div>
-              {activeTab === 'structure' && isSuperAdmin ? (
+              {false && activeTab === 'structure' && isSuperAdmin ? (
                 <div className="grid gap-3 md:grid-cols-2">
                   <label className="space-y-2">
                     <span className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">
@@ -2960,17 +1859,76 @@ export function DashboardConsole() {
                   </label>
                 </div>
               ) : null}
-              <div className="flex items-center gap-3 rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] px-4 py-3">
-                <BellRing className="h-5 w-5 text-[var(--color-accent)]" />
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">
-                    Açık görüşme
-                  </p>
-                  <p className="font-semibold">{openCalls.length}</p>
+              <div className="flex w-full flex-col items-stretch gap-3 md:w-auto md:min-w-[320px] md:items-end">
+                <div className="flex w-full justify-end">
+                  <div
+                    className={`overflow-hidden rounded-xl border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] transition-[max-width,opacity] duration-300 md:w-auto ${
+                      isSessionTrayOpen ? 'max-w-[360px] opacity-100' : 'max-w-[56px] opacity-90'
+                    }`}
+                  >
+                    <div className="flex items-stretch">
+                      <button
+                        type="button"
+                        aria-label={isSessionTrayOpen ? 'Hesap panelini gizle' : 'Hesap panelini aç'}
+                        aria-expanded={isSessionTrayOpen}
+                        onClick={() => setIsSessionTrayOpen((current) => !current)}
+                        className="inline-flex min-h-[56px] min-w-[56px] items-center justify-center border-r-2 border-[var(--color-line)] text-[var(--color-accent)] transition hover:bg-[var(--color-accent-soft)]"
+                      >
+                        {isSessionTrayOpen ? (
+                          <ChevronRight className="h-5 w-5" />
+                        ) : (
+                          <ChevronLeft className="h-5 w-5" />
+                        )}
+                      </button>
+                      <div
+                        className={`grid transition-[grid-template-columns,opacity] duration-300 ${
+                          isSessionTrayOpen ? 'grid-cols-[1fr] opacity-100' : 'grid-cols-[0fr] opacity-0'
+                        }`}
+                      >
+                        <div className="overflow-hidden">
+                          <div className="flex min-w-[264px] items-center justify-between gap-4 px-4 py-3">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold">{user.fullName}</p>
+                              <p className="mt-1 text-[11px] uppercase tracking-[0.16em] text-[var(--color-muted)]">
+                                {sessionRoleLabel(user.role)}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleLogout()}
+                              disabled={signOutPending}
+                              className="inline-flex items-center justify-center gap-2 rounded-md border-2 border-[var(--color-line)] px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {signOutPending ? (
+                                <LoaderCircle className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <LogOut className="h-4 w-4" />
+                              )}
+                              Çıkış
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 self-end rounded-md border-2 border-[var(--color-line)] bg-[var(--color-panel-soft)] px-4 py-3">
+                  <BellRing className="h-5 w-5 text-[var(--color-accent)]" />
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--color-muted)]">
+                      Açık görüşme
+                    </p>
+                    <p className="font-semibold">{openCalls.length}</p>
+                  </div>
                 </div>
               </div>
             </div>
           </header>
+          {isSuperAdmin ? (
+            <div hidden={activeTab !== 'structure'}>
+              <SitesManagementConsole />
+            </div>
+          ) : null}
           {content}
         </section>
       </div>

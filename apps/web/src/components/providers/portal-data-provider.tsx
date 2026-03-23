@@ -121,6 +121,11 @@ export type GeneratedAccountCredentials = {
   role: 'resident' | 'consultant';
 };
 
+export type ResidentAccountSnapshot = {
+  systemPassword: string | null;
+  passwordUpdatedAt: string | null;
+};
+
 type CreateServiceProviderInput = {
   siteId: string;
   category: ProviderCategory;
@@ -206,6 +211,8 @@ type PortalDataContextValue = {
   createResident: (input: CreateResidentInput) => Promise<GeneratedAccountCredentials>;
   updateResident: (input: UpdateResidentInput) => Promise<void>;
   deleteResident: (profileId: string) => Promise<void>;
+  getResidentAccountSnapshot: (profileId: string) => Promise<ResidentAccountSnapshot>;
+  resetResidentPassword: (profileId: string) => Promise<ResidentAccountSnapshot>;
   createConsultant: (input: CreateConsultantInput) => Promise<GeneratedAccountCredentials>;
   assignSiteManager: (input: AssignSiteManagerInput) => Promise<void>;
   setConsultantAssignment: (input: SetConsultantAssignmentInput) => Promise<void>;
@@ -272,11 +279,20 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<PortalState>(createEmptyPortalState());
   const [ready, setReady] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasLoadedStateRef = useRef(false);
+
+  const sessionUser = session?.user ?? null;
+  const sessionUserId = sessionUser?.id ?? '';
+  const sessionUserRole = sessionUser?.role ?? '';
+  const sessionUserUnitId = sessionUser?.unitId ?? '';
+  const sessionSiteIdsKey = sessionUser?.siteIds.join('|') ?? '';
+  const sessionBuildingIdsKey = sessionUser?.buildingIds.join('|') ?? '';
 
   async function refreshState() {
     if (!session?.user) {
       setState(createEmptyPortalState());
       setReady(true);
+      hasLoadedStateRef.current = false;
       return;
     }
 
@@ -297,6 +313,7 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     );
     setState(nextState);
     setReady(true);
+    hasLoadedStateRef.current = true;
   }
 
   async function adminPortalAction<T = void>(action: string, payload: Record<string, unknown>) {
@@ -337,27 +354,40 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (!session?.user) {
+    if (!sessionUser) {
       setState(createEmptyPortalState());
       setReady(true);
+      hasLoadedStateRef.current = false;
       return;
     }
 
-    setReady(false);
+    if (!hasLoadedStateRef.current) {
+      setReady(false);
+    }
+
     void refreshState().catch(() => {
       setState(createEmptyPortalState());
       setReady(true);
+      hasLoadedStateRef.current = false;
     });
-  }, [authLoading, session?.user]);
+  }, [
+    authLoading,
+    session?.token,
+    sessionBuildingIdsKey,
+    sessionSiteIdsKey,
+    sessionUserId,
+    sessionUserRole,
+    sessionUserUnitId
+  ]);
 
   useEffect(() => {
     const client = getSupabaseBrowserClient();
 
-    if (!client || !session?.user) {
+    if (!client || !sessionUserId) {
       return;
     }
 
-    const channel = client.channel(`portal-sync-${session.user.id}`);
+    const channel = client.channel(`portal-sync-${sessionUserId}`);
 
     const scheduleRefresh = () => {
       if (refreshTimerRef.current) {
@@ -390,7 +420,7 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
 
       void client.removeChannel(channel);
     };
-  }, [session?.user]);
+  }, [sessionUserId]);
 
   async function createGuestRequest(input: CreateGuestRequestInput) {
     const client = assertAuthenticated();
@@ -679,6 +709,24 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
     await refreshState();
   }
 
+  async function getResidentAccountSnapshot(profileId: string) {
+    const result = await adminPortalAction<{ snapshot: ResidentAccountSnapshot }>(
+      'getResidentAccountSnapshot',
+      { profileId }
+    );
+
+    return result.snapshot;
+  }
+
+  async function resetResidentPassword(profileId: string) {
+    const result = await adminPortalAction<{ snapshot: ResidentAccountSnapshot }>(
+      'resetResidentPassword',
+      { profileId }
+    );
+
+    return result.snapshot;
+  }
+
   async function createConsultant(input: CreateConsultantInput) {
     const result = await adminPortalAction<{ credentials: GeneratedAccountCredentials }>(
       'createConsultant',
@@ -841,6 +889,8 @@ export function PortalDataProvider({ children }: { children: ReactNode }) {
       createResident,
       updateResident,
       deleteResident,
+      getResidentAccountSnapshot,
+      resetResidentPassword,
       createConsultant,
       assignSiteManager,
       setConsultantAssignment,

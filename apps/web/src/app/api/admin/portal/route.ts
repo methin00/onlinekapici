@@ -54,6 +54,8 @@ function readProviderCategory(value: unknown) {
 }
 
 const PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const RESIDENT_PASSWORD_METADATA_KEY = 'resident_system_password';
+const RESIDENT_PASSWORD_UPDATED_AT_KEY = 'resident_system_password_updated_at';
 
 function createRandomSecret(length: number) {
   return Array.from({ length }, () => {
@@ -691,6 +693,99 @@ function buildConsultantAuthEmail(phone: string) {
   return `consultant-${normalizePhone(phone)}@auth.onlinekapici.com`;
 }
 
+type ResidentAuthSnapshot = {
+  systemPassword: string | null;
+  passwordUpdatedAt: string | null;
+};
+
+function readResidentAuthSnapshot(metadata: unknown): ResidentAuthSnapshot {
+  const source =
+    metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>)
+      : {};
+
+  return {
+    systemPassword:
+      typeof source[RESIDENT_PASSWORD_METADATA_KEY] === 'string'
+        ? source[RESIDENT_PASSWORD_METADATA_KEY]
+        : null,
+    passwordUpdatedAt:
+      typeof source[RESIDENT_PASSWORD_UPDATED_AT_KEY] === 'string'
+        ? source[RESIDENT_PASSWORD_UPDATED_AT_KEY]
+        : null
+  };
+}
+
+async function requireResidentAccountProfile(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  profileId: string
+) {
+  const { data: profile, error } = await admin
+    .from('profiles')
+    .select('id, role, full_name')
+    .eq('id', profileId)
+    .maybeSingle();
+
+  if (error || !profile || !['resident', 'manager'].includes(profile.role)) {
+    throw new HttpError('Seçilen kullanıcı daire sakini değil.', 400);
+  }
+
+  return profile as {
+    id: string;
+    role: 'resident' | 'manager';
+    full_name: string;
+  };
+}
+
+async function getResidentAccountSnapshotForProfile(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  profileId: string
+) {
+  const profile = await requireResidentAccountProfile(admin, profileId);
+  const { data, error } = await admin.auth.admin.getUserById(profile.id);
+
+  if (error || !data.user) {
+    throw new HttpError(error?.message || 'Sakin oturum bilgisi alınamadı.', 400);
+  }
+
+  return readResidentAuthSnapshot(data.user.user_metadata);
+}
+
+async function resetResidentAccountPassword(
+  admin: ReturnType<typeof getSupabaseAdminClient>,
+  profileId: string
+) {
+  const profile = await requireResidentAccountProfile(admin, profileId);
+  const generatedPassword = createRandomSecret(8);
+
+  const { data: authData, error: authError } = await admin.auth.admin.getUserById(profile.id);
+
+  if (authError || !authData.user) {
+    throw new HttpError(authError?.message || 'Sakin oturum bilgisi alınamadı.', 400);
+  }
+
+  const userMetadata = {
+    ...(authData.user.user_metadata ?? {}),
+    full_name: profile.full_name,
+    [RESIDENT_PASSWORD_METADATA_KEY]: generatedPassword,
+    [RESIDENT_PASSWORD_UPDATED_AT_KEY]: new Date().toISOString()
+  };
+
+  const { data: updatedUser, error: updateError } = await admin.auth.admin.updateUserById(
+    profile.id,
+    {
+      password: generatedPassword,
+      user_metadata: userMetadata
+    }
+  );
+
+  if (updateError || !updatedUser.user) {
+    throw new HttpError(updateError?.message || 'Sakin şifresi güncellenemedi.', 400);
+  }
+
+  return readResidentAuthSnapshot(updatedUser.user.user_metadata ?? userMetadata);
+}
+
 function createBuildingApiKey() {
   return crypto.randomUUID().replaceAll('-', '');
 }
@@ -953,7 +1048,9 @@ export async function POST(request: NextRequest) {
           password: generatedPassword,
           email_confirm: true,
           user_metadata: {
-            full_name: fullName
+            full_name: fullName,
+            [RESIDENT_PASSWORD_METADATA_KEY]: generatedPassword,
+            [RESIDENT_PASSWORD_UPDATED_AT_KEY]: new Date().toISOString()
           }
         });
         if (authError || !authData.user) {
@@ -979,6 +1076,18 @@ export async function POST(request: NextRequest) {
           password: generatedPassword,
           role: 'resident'
         };
+        break;
+      }
+      case 'getResidentAccountSnapshot': {
+        ensureSuperAdmin(actor);
+        const profileId = readTrimmedString(payload.profileId, 'Sakin');
+        responsePayload.snapshot = await getResidentAccountSnapshotForProfile(admin, profileId);
+        break;
+      }
+      case 'resetResidentPassword': {
+        ensureSuperAdmin(actor);
+        const profileId = readTrimmedString(payload.profileId, 'Sakin');
+        responsePayload.snapshot = await resetResidentAccountPassword(admin, profileId);
         break;
       }
       case 'updateResident': {
